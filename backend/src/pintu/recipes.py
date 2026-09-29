@@ -32,8 +32,8 @@ class RenderRequest:
     Attributes:
         recipe: ``module.path:function``, importable from the project root.
         params: JSON-serializable keyword arguments.
-        width_mm: Cell width.
-        height_mm: Cell height.
+        width_mm: Width of the cell.
+        height_mm: Height of the cell below its letter band.
     """
 
     recipe: str

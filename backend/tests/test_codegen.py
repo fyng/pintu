@@ -1,4 +1,7 @@
+import io
+
 import typst
+from PIL import Image
 
 from pintu import codegen
 from pintu.board import Board
@@ -22,7 +25,24 @@ panels:
     assert 'board-panel(W, H, G, (0, 0, 18, 6), gutter: 3mm, src: "/plots/a.pdf", kind: "vector", label: "a", letter: "a"' in src
     assert 'src: none, kind: "vector", label: "b: missing file plots/missing.pdf", letter: "x"' in src
     assert 'label: "c: recipe m:f (not rendered yet)", letter: "y"' in src
-    assert 'label: "d", letter: none' in src
+    assert 'label: "d", letter: none, band: 0mm' in src
+    assert src.count("band: 3.5mm") == 3
+
+
+def test_static_panel_sits_below_band(tmp_path):
+    """A lettered static file is fitted into the area below the band; an unlettered one fills the cell."""
+    from pintu.render import library_source
+    (tmp_path / "sq.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>')
+    body = (library_source() + """
+#set page(width: 100mm, height: 50mm, margin: 0pt)
+#board-panel(100mm, 50mm, (2, 1), (0, 0, 1, 1), gutter: 0mm, src: "/sq.svg", letter: "a", band: 4mm)
+#board-panel(100mm, 50mm, (2, 1), (1, 0, 2, 1), gutter: 0mm, src: "/sq.svg", letter: none, band: 0mm)
+""")
+    png = typst.compile(body.encode(), format="png", ppi=25.4, root=str(tmp_path))  # 1 px per mm
+    im = Image.open(io.BytesIO(png if isinstance(png, bytes) else png[0])).convert("L")
+    # Lettered: a 46 mm square from y = 4 mm; unlettered: a 50 mm square from the top.
+    assert im.getpixel((25, 2)) > 200 and im.getpixel((25, 6)) < 50 and im.getpixel((25, 49)) < 50
+    assert im.getpixel((75, 1)) < 50
 
 
 def test_string_escaping():

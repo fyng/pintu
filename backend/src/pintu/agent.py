@@ -39,8 +39,8 @@ STYLE_RULES = """\
 - Figure widths: 89 mm (1 column), 136 mm (1.5 columns), 183 mm (2 columns); height at most 170 mm.
 - The recipe draws one panel at exactly the cell size it gets (w, h in mm); the board places it.
 - All text 5-7 pt (7 pt for labels, 5-6 pt for ticks and dense annotations); sans-serif font.
-- The top-left 5 x 5 mm of the panel is the letter zone; the board draws the panel letter
-  there, so keep text out of it.
+- The board draws the panel letter in a letter band above the figure; the recipe needs
+  no room for it.
 - No text may fall outside the figure.
 - No figure titles in panels; put the message in axis labels, legends or annotations.
 - Prefer direct labels over legends when there is room; drop non-essential elements
@@ -184,15 +184,12 @@ def lint(summary: dict, w: float, h: float) -> list[str]:
     sw, sh = summary["size_mm"]
     if abs(sw - w) > SIZE_TOL_MM or abs(sh - h) > SIZE_TOL_MM:
         out.append(f"size: figure is {fmt_size(sw, sh)}, cell is {fmt_size(w, h)}")
-    z = summary.get("letter_zone_mm", 5.0)
     lo, hi = FONT_PT
     e = EDGE_TOL_MM
     for t in drawn_texts(summary):
         x0, y0, x1, y1 = t["bbox_mm"]
         if x0 < -e or y0 < -e or x1 > sw + e or y1 > sh + e:
             out.append(f"overflow: text {t['text']!r} at {t['bbox_mm']} falls outside the figure")
-        if x0 < z and y0 < z:
-            out.append(f"letter zone: text {t['text']!r} at {t['bbox_mm']} enters the top-left {z:g} mm")
         if not lo - 0.01 <= t["fontsize_pt"] <= hi + 0.01:
             out.append(f"font: text {t['text']!r} is {t['fontsize_pt']:g} pt (allowed {lo:g}-{hi:g} pt)")
     return out
@@ -357,7 +354,7 @@ class Agent:
 
     def panel_size(self, pid: str) -> tuple[float, float]:
         b = self.board()
-        _, _, w, h = b.page.rect(b.panel(pid)["cell"])
+        _, _, w, h = b.content_rect(b.panel(pid))
         return round(w, 3), round(h, 3)
 
     def recipe(self, pid: str) -> tuple[str, dict, str]:
@@ -461,9 +458,10 @@ class Agent:
     def t_get_board(self) -> str:
         b = self.board()
         pg = b.page
+        bands = b.bands()
         panels = []
         for p in b.panels:
-            _, _, w, h = pg.rect(p["cell"])
+            _, _, w, h = b.content_rect(p, bands[p["id"]])
             src = dict(p.get("source") or {})
             panels.append({"id": p["id"], "cell": list(p["cell"]), "size_mm": [round(w, 2), round(h, 2)],
                            "source": {k: src[k] for k in ("file", "recipe", "params") if k in src}})
@@ -520,7 +518,7 @@ class Agent:
             f"## Panel\n\nBoard {self.board_name!r}, panel {self.panel_id!r}, recipe `{recipe}`"
             + (f" with params {json.dumps(params)}" if params else "")
             + f".\nOld size: {fmt_size(*self.old_size)}. New size: {fmt_size(*self.size)}."
-            + f" Cell size on the board: {fmt_size(*self.cell_size)}.",
+            + f" Size on the board (below the letter band): {fmt_size(*self.cell_size)}.",
             f"## Recipe source ({rel})\n\n```python\n{self.t_read_file(rel)}\n```",
             f"## Current render at the new size\n\n{report(res, w, h)}",
         ])

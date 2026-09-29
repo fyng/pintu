@@ -62,7 +62,25 @@ def test_add_split_letter_ops():
     ("panels:\n  - {id: a, cell: [0, 0, 4, 4]}\n  - {id: a, cell: [4, 4, 6, 6]}\n", "duplicate"),
     ("panels:\n  - {id: a, cell: [0, 0, 1.5, 4]}\n", "integers"),
     ("- a\n", "mapping"),
+    ("page: {letter_band: -1}\npanels: []\n", "letter_band"),
 ])
 def test_invalid_boards(bad, msg):
     with pytest.raises(BoardError, match=msg):
         Board.loads(bad)
+
+
+def test_letter_band_and_content_rect():
+    b = Board.loads("""\
+page: {width: 183, height: 173, grid: 36, gutter: 3}
+panels:
+  - {id: a, cell: [0, 0, 18, 18], source: {recipe: "m:f"}}
+  - {id: b, cell: [18, 0, 36, 18], letter: false}
+  - {id: c, cell: [0, 18, 36, 19]}
+""")
+    assert b.letter_band == 3.5  # Nature preset
+    x, y, w, h = b.page.rect([0, 0, 18, 18])
+    assert b.bands() == {"a": 3.5, "b": 0.0, "c": b.page.rect([0, 18, 36, 19])[3] / 2}
+    assert b.content_rect(b.panel("a")) == (x, y + 3.5, w, h - 3.5)
+    assert b.content_rect(b.panel("b")) == b.page.rect([18, 0, 36, 18])
+    b.set_page(letter_band=5)
+    assert b.bands()["a"] == 5.0 and b.content_rect(b.panel("a"))[3] == h - 5

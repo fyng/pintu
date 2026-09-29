@@ -79,7 +79,7 @@ def test_loop_native(project):
     tool_msgs = [m for m in last if m["role"] == "tool"]
     assert len(tool_msgs) == 3 and tool_msgs[0]["tool_call_id"] == "c0"
     assert "def boxes" in tool_msgs[0]["content"] and "ok: edited" in tool_msgs[1]["content"]
-    assert tool_msgs[2]["content"].startswith("render ok at 90 x 49.861 mm")
+    assert tool_msgs[2]["content"].startswith("render ok at 90 x 46.361 mm")
     assert not any("reasoning" in json.dumps(m) for m in last if m["role"] == "assistant")
     recs = [json.loads(ln) for ln in res.transcript.read_text().splitlines()]
     assert res.transcript.parent == project.root / ".pintu" / "agent"
@@ -282,7 +282,7 @@ def test_context(project):
     a, _ = make(project, [], size=(44, 55), old_size=(89, 55))
     msgs = asyncio.run(a.context("Adapt"))
     system, user = msgs[0]["content"], msgs[1]["content"]
-    assert "Style rules (Nature)" in system and "letter zone" in system and "tool_call_json" not in system
+    assert "Style rules (Nature)" in system and "letter band" in system and "tool_call_json" not in system
     body = user[0]["text"]
     assert "Old size: 89 x 55 mm. New size: 44 x 55 mm." in body
     assert "def boxes(w, h, n=40)" in body and 'params {"n": 40}' in body
@@ -321,12 +321,12 @@ def test_prune_images():
 
 def test_lint():
     summary = {
-        "size_mm": [89.3, 55.0], "letter_zone_mm": 5.0,
+        "size_mm": [89.3, 55.0],
         "axes": [{"bbox_mm": [10, 5, 85, 50], "title": "", "xlabel": "", "ylabel": "", "legend": False,
                   "n_xticks": 5, "n_yticks": 5}],
         "texts": [
             {"text": "Label", "fontsize_pt": 7, "bbox_mm": [20, 52, 30, 55.2]},    # ok, within tolerance
-            {"text": "Title", "fontsize_pt": 9, "bbox_mm": [1, 1, 30, 4]},         # letter zone and font
+            {"text": "Title", "fontsize_pt": 9, "bbox_mm": [1, 1, 30, 4]},         # font; the top-left is free (letter band)
             {"text": "Wide label", "fontsize_pt": 6, "bbox_mm": [80, 20, 95, 23]},  # overflow
             {"text": "10", "fontsize_pt": 6, "bbox_mm": [6, 20, 9, 22]},            # drawn y tick
             {"text": "−5", "fontsize_pt": 6, "bbox_mm": [-2, 51, 1, 53]},          # undrawn x tick
@@ -334,7 +334,7 @@ def test_lint():
     }
     problems = ag.lint(summary, 89, 55)
     assert problems[0].startswith("size:")
-    assert sum(p.startswith("letter zone") for p in problems) == 1
+    assert not any(p.startswith("letter zone") for p in problems)
     assert any("'Title' is 9 pt" in p for p in problems)
     assert [p for p in problems if p.startswith("overflow")] == [
         "overflow: text 'Wide label' at [80, 20, 95, 23] falls outside the figure"]

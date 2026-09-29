@@ -16,7 +16,7 @@ rng = np.random.default_rng(0)
 
 
 def fig(w, h):
-    """A figure of w x h mm with a margin that keeps the 5 mm letter zone free."""
+    """A figure of w x h mm with margins in mm."""
     f = plt.figure(figsize=(w * MM, h * MM))
     f.subplots_adjust(left=10 / w, bottom=8 / h, right=1 - 2 / w, top=1 - 6 / h)
     return f, f.add_subplot()

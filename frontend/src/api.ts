@@ -4,6 +4,7 @@ export interface Panel {
   id: string;
   cell: Cell;
   rect: [number, number, number, number];
+  band: number;
   letter: string | null;
   letterSetting: string | null;
   source: { file?: string; recipe?: string };
@@ -35,7 +36,7 @@ export interface BoardView {
   name: string;
   rev: number;
   page: Page & { style: string };
-  preset: { widths: Record<string, number>; maxHeight: number; letterZone: number };
+  preset: { widths: Record<string, number>; maxHeight: number; letterBand: number };
   panels: Panel[];
   warnings: string[];
   opWarnings?: string[];

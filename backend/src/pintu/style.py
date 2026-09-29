@@ -9,7 +9,7 @@ NATURE = {
     "max_height": 170.0,
     "font": ["IBM Plex Sans", "Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"],
     "font_size_pt": 7.0,
-    "letter": {"size_pt": 8.0, "lower": True, "zone_mm": 5.0},
+    "letter": {"size_pt": 8.0, "lower": True, "band_mm": 3.5},
 }
 
 

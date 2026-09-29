@@ -107,6 +107,7 @@ class State:
         page = b.page
         st = styles.get(b.style)
         letters = b.letters()
+        bands = b.bands()
         panels, warnings = [], []
         if page.height > st["max_height"]:
             warnings.append(f"page height {page.height:g} mm exceeds the {st['name']} cap of {st['max_height']:g} mm")
@@ -120,6 +121,7 @@ class State:
                 "id": p["id"],
                 "cell": list(p["cell"]),
                 "rect": list(page.rect(p["cell"])),
+                "band": bands[p["id"]],
                 "letter": letters[p["id"]].lower() if letters[p["id"]] and st["letter"]["lower"] else letters[p["id"]],
                 "letterSetting": None if setting is None or setting is False else setting,
                 "source": {k: src[k] for k in ("file", "recipe") if k in src},
@@ -135,7 +137,7 @@ class State:
             "page": {"width": page.width, "height": page.height, "grid": [page.nx, page.ny],
                      "gutter": page.gutter, "style": b.style},
             "preset": {"widths": st["widths"], "maxHeight": st["max_height"],
-                       "letterZone": st["letter"]["zone_mm"]},
+                       "letterBand": b.letter_band},
             "panels": panels,
             "warnings": warnings,
         }

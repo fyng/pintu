@@ -170,8 +170,8 @@ any edit gets one reminder instead of ending the run. Results come back as a use
 (`reasoning_content`, `reasoning` or `<think>` tags) is logged and never parsed for
 tool calls.
 
-**Lint** (`agent.lint`): size off the cell by more than 0.1 mm, text more than 0.3 mm
-outside the figure, text in the top-left 5 mm letter zone, font sizes outside 5–7 pt.
+**Lint** (`agent.lint`): size off the render size by more than 0.1 mm, text more than
+0.3 mm outside the figure, font sizes outside 5–7 pt.
 Tick labels outside the view limits, which the worker summary still lists, are skipped.
 
 **Renders to PNG** go through typst-py: a page that embeds the SVG, compiled to PNG

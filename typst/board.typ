@@ -25,34 +25,32 @@
   body
 }
 
-// Draws a panel letter at the top-left of a letter zone.
-#let board-letter(letter, zone: 5mm, size: 8pt) = box(width: zone, height: zone,
+// Draws a panel letter at the top-left of its letter band.
+#let board-letter(letter, band: 3.5mm, size: 8pt) = box(height: band,
   align(left + top, text(size: size, weight: 700, letter)))
 
 // A placeholder for a panel with no drawable source.
-#let board-empty(w, h, label, zone: 5mm) = block(width: w, height: h, fill: luma(245),
+#let board-empty(w, h, label, band: 0mm) = block(width: w, height: h, fill: luma(245),
   stroke: (paint: luma(160), thickness: 0.4pt, dash: "dashed"),
-  inset: (left: zone + 0.5mm, top: 1.2mm, right: 1mm, bottom: 1mm),
+  inset: (left: 1mm, top: band + 1.2mm, right: 1mm, bottom: 1mm),
   text(size: 5.5pt, fill: luma(110), label))
 
 // One panel at grid cell (x0, y0, x1, y1). `src` is a root-relative path
-// ("/…") or none; `kind` is "vector" or "raster". A vector fills the cell and
-// keeps the letter zone free through its own margins; a raster sits below the
-// letter zone.
+// ("/…") or none; `kind` is "vector" or "raster". A lettered panel reserves a
+// full-width band of height `band` at its top for the letter; the source fills
+// the area below it (band 0: the whole cell).
 #let board-panel(page-w, page-h, grid, cell, gutter: 3mm, src: none, kind: "vector",
-  label: "", letter: none, zone: 5mm, letter-size: 8pt) = {
+  label: "", letter: none, band: 0mm, letter-size: 8pt) = {
   let x = grid-span(page-w, grid.at(0), cell.at(0), cell.at(2), gutter: gutter)
   let y = grid-span(page-h, grid.at(1), cell.at(1), cell.at(3), gutter: gutter)
   place(top + left, dx: x.at, dy: y.at, block(width: x.len, height: y.len, clip: true, {
     if src == none {
-      board-empty(x.len, y.len, label, zone: zone)
-    } else if kind == "raster" {
-      pad(top: zone, image(src, width: x.len, height: y.len - zone, fit: "contain"))
+      board-empty(x.len, y.len, label, band: band)
     } else {
-      image(src, width: x.len, height: y.len, fit: "contain")
+      place(top + left, dy: band, image(src, width: x.len, height: y.len - band, fit: "contain"))
     }
     if letter != none {
-      place(top + left, board-letter(letter, zone: zone, size: letter-size))
+      place(top + left, board-letter(letter, band: band, size: letter-size))
     }
   }))
 }

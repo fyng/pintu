@@ -42,7 +42,8 @@ export function Inspector() {
   return (
     <div className="inspector" data-testid="inspector">
       <h3>{p.id}</h3>
-      <div className="meta">cell [{p.cell.join(", ")}] · {p.rect[2].toFixed(1)} × {p.rect[3].toFixed(1)} mm</div>
+      <div className="meta">cell [{p.cell.join(", ")}] · {p.rect[2].toFixed(1)} × {p.rect[3].toFixed(1)} mm
+        {p.source.recipe && p.band > 0 && <> · plot {p.rect[2].toFixed(1)} × {(p.rect[3] - p.band).toFixed(1)} mm</>}</div>
       <div className="meta">{p.source.file ?? p.source.recipe ?? "no source"}</div>
       <label>
         Letter

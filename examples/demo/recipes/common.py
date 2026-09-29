@@ -14,5 +14,5 @@ def figure(w, h):
 
 
 def axes_mm(fig, w, h, left, top, right, bottom):
-    """Adds axes with margins in mm (top leaves room for the 5 mm letter zone)."""
+    """Adds axes with margins in mm."""
     return fig.add_axes([left / w, bottom / h, (w - left - right) / w, (h - top - bottom) / h])
