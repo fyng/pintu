@@ -11,7 +11,7 @@ from pintu.recipes import RenderRequest, SubprocessRunner
 from pintu.renders import request_for
 from pintu.server import apply_ops, recipe_panel_id
 
-M = styles.margins("nature")
+M = styles.margins(styles.get("nature"))
 
 
 def test_parse_spans_and_empties():
@@ -251,3 +251,4 @@ panels:
     x0 = min(a["bbox_mm"][0] for a in res.summary["axes"])
     assert x0 == pytest.approx(M["left"], abs=0.05)
     assert (tmp_path / res.svg).is_file() and "__multiples__" not in res.svg
+

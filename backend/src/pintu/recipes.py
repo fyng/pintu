@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Protocol
 
-from . import worker
+from . import style as styles, worker
 from .project import Project
 
 OUT_DIR = "pintu_out"
@@ -54,11 +54,12 @@ class RenderResult:
         svg: Root-relative SVG path, or None on failure.
         error: Traceback text on failure.
         code_hash: sha256 of the recipe module and its project-local imports.
-        summary: ``worker.summarize`` output: size, axes, texts, overflow.
+        summary: ``worker.summarize`` output: size, axes, texts, overflow, fonts, marks.
         stdout: Captured recipe stdout.
         stderr: Captured recipe stderr.
         seconds: Wall time of the call.
         cached: Whether the result came from the render cache.
+        lint: ``lint.check`` issues, set by ``Renders``.
     """
 
     ok: bool
@@ -70,6 +71,7 @@ class RenderResult:
     stderr: str = ""
     seconds: float = 0.0
     cached: bool = False
+    lint: list = field(default_factory=list)
 
 
 class Runner(Protocol):
@@ -112,9 +114,11 @@ def recipe_python(project: Project) -> str:
 
 def worker_request(project: Project, req: RenderRequest) -> dict:
     """The dict ``worker.render`` takes."""
+    pack = styles.for_project(project)
     return {"root": str(project.root), "recipe": req.recipe, "params": req.params,
             "width_mm": req.width_mm, "height_mm": req.height_mm, "multiples": req.multiples,
-            "out": str(project.root / request_path(req))}
+            "out": str(project.root / request_path(req)),
+            "fonts": list(pack.fonts), "font_paths": [str(p) for p in pack.font_paths]}
 
 
 def to_result(raw: dict, req: RenderRequest, stdout: str = "", stderr: str = "") -> RenderResult:

@@ -1,0 +1,37 @@
+# pintu's neutral default style pack. Schema: pintu.style (SPEC §10).
+
+[pack]
+name = "default"
+default_preset = "nature"
+notes = [
+    "No figure titles in panels; put the message in axis labels, legends or annotations.",
+    "Prefer direct labels over legends when there is room; drop non-essential elements (titles, gridlines, secondary annotations) before shrinking text below the minimum size.",
+]
+
+[fonts]
+family = ["IBM Plex Sans", "Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"]
+size_pt = 7
+
+[letter]
+size_pt = 8
+weight = 700
+case = "lower"
+band_mm = 3.5
+
+[margins]   # mm; the same as pintu_sdk.multiples.MARGINS
+left = 12
+right = 1.5
+top = 1
+bottom = 7.5
+gap = 2
+tick = 4
+title = 3
+key = 3.5
+
+[presets.nature]
+widths = { col1 = 89, col15 = 136, full = 183 }
+max_height = 170
+
+[lint]
+text_pt = [5, 7]
+size_tol_mm = 0.1

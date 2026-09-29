@@ -52,6 +52,13 @@ export interface RenderStatus {
   error?: string;
   stdout?: string;
   stderr?: string;
+  /** Lint issues against the style pack (SPEC §8). */
+  lint?: LintIssue[];
+}
+
+export interface LintIssue {
+  rule: string;
+  message: string;
 }
 
 export interface RecipeLocation {
@@ -65,7 +72,7 @@ export interface BoardView {
   name: string;
   rev: number;
   page: Page & { style: string };
-  preset: { widths: Record<string, number>; maxHeight: number; letterBand: number };
+  preset: { pack: string; name: string; widths: Record<string, number>; maxHeight: number; letterBand: number };
   panels: Panel[];
   groups: Group[];
   warnings: string[];

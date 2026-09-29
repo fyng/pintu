@@ -149,6 +149,11 @@ function RecipeSection({ p }: { p: Panel }) {
             </span>
             <button onClick={() => setCode(true)} disabled={r?.status === "missing"}>Open code</button>
           </div>
+          {r?.status === "ok" && !!r.lint?.length && (
+            <ul className="lint" data-testid="lint">
+              {r.lint.map((i, k) => <li key={k}><b>{i.rule}</b> {i.message}</li>)}
+            </ul>
+          )}
           {r?.status === "error" && <pre className="render-error">{[r.error, r.stderr].filter(Boolean).join("\n")}</pre>}
           {code && <Suspense fallback={null}><CodeView recipe={recipe} onClose={() => setCode(false)} /></Suspense>}
         </>

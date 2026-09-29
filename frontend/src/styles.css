@@ -62,6 +62,8 @@ line.fine { stroke: #d5dde8; stroke-width: 0.12; }
 .badge-rendering rect { fill: #5577aa; }
 .badge-error rect { fill: #c0392b; }
 .badge-missing rect { fill: #d68910; }
+.badge-lint rect { fill: #b9770e; }
+.lint { color: #9a5b00; font-size: 11px; margin: 4px 0; padding-left: 16px; max-height: 12em; overflow: auto; }
 .recipe textarea { width: 100%; font-family: monospace; font-size: 12px; }
 .recipe input { width: 100%; font-family: monospace; }
 .render-error { color: #c0392b; white-space: pre-wrap; font-size: 11px; max-height: 12em; overflow: auto; }
