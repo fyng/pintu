@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -105,8 +106,19 @@ def git_sha(root: Union[str, Path]) -> Optional[str]:
     return None
 
 
+def main_script(root: Path) -> Optional[str]:
+    """The running ``__main__`` script as a root-relative ``/`` path, or None if it is outside the root."""
+    f = getattr(sys.modules.get("__main__"), "__file__", None)
+    if not f:
+        return None
+    try:
+        return Path(f).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
 def save(fig: Any, path: Union[str, Path], recipe: Optional[str] = None,
-         params: Optional[dict] = None, **savefig_kwargs: Any) -> Path:
+         params: Optional[dict] = None, script: Optional[str] = None, **savefig_kwargs: Any) -> Path:
     """Saves a figure and writes its sidecar ``<name>.meta.json``.
 
     Args:
@@ -115,6 +127,9 @@ def save(fig: Any, path: Union[str, Path], recipe: Optional[str] = None,
         recipe: ``module.path:function`` that draws this plot as ``fn(w, h, **params)``.
             Without it the file is indexed as unlinked.
         params: JSON-serializable keyword arguments of the recipe call.
+        script: Root-relative path of the script that drew the plot, which pintu's
+            "Promote to recipe" reads; defaults to the running ``__main__`` file
+            when it is under the project root.
         **savefig_kwargs: Passed to ``fig.savefig``.
 
     Returns:
@@ -131,6 +146,7 @@ def save(fig: Any, path: Union[str, Path], recipe: Optional[str] = None,
         "width_mm": round(float(w) * MM, 3),
         "height_mm": round(float(h) * MM, 3),
         "code_hash": code_hash(root, recipe.partition(":")[0]) if recipe else None,
+        "script": script or main_script(root),
         "git_sha": git_sha(root),
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }

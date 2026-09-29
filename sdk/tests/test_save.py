@@ -31,7 +31,8 @@ def test_save_writes_output_and_sidecar(tmp_path, monkeypatch):
     assert out.read_bytes().startswith(b"%PDF") and side == sidecar_path(out)
     assert side.name == "P001.pdf.meta.json"
     meta = json.loads(side.read_text())
-    assert set(meta) == {"recipe", "params", "width_mm", "height_mm", "code_hash", "git_sha", "created"}
+    assert set(meta) == {"recipe", "params", "width_mm", "height_mm", "code_hash", "script", "git_sha",
+                         "created"}
     assert meta["recipe"] == "rec.plot:tl" and meta["params"] == {"patient": "P001", "n": 3}
     assert (meta["width_mm"], meta["height_mm"]) == (101.6, 50.8)
     assert meta["code_hash"] == code_hash(tmp_path, "rec.plot") and len(meta["code_hash"]) == 64

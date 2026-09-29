@@ -189,6 +189,9 @@ class KernelRunner:
             code = CALL.format(payload=json.dumps(worker_request(self.project, req)))
             try:
                 out, reply = await self._execute(code, self.timeout, {"r": "_pintu_result"})
+            except asyncio.CancelledError:  # an aborted agent turn: stop the recipe too
+                await asyncio.shield(self._interrupt())
+                raise
             except asyncio.TimeoutError:
                 if not await self._interrupt():
                     await self._stop()

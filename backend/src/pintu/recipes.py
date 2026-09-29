@@ -149,6 +149,9 @@ class SubprocessRunner:
             proc.kill()
             await proc.wait()
             return RenderResult(ok=False, error=f"render timed out after {self.timeout:.0f} s")
+        except asyncio.CancelledError:  # an aborted agent turn
+            proc.kill()
+            raise
         text, errtext = out.decode(errors="replace"), err.decode(errors="replace")
         head, sep, tail = text.rpartition(WORKER_MARKER)
         if not sep:
@@ -192,6 +195,47 @@ def locate(project: Project, recipe: str) -> Optional[tuple[Path, int]]:
             return None
         body = getattr(node, "body", [])
     return f, node.lineno
+
+
+def size_range(project: Project, recipe: str) -> Optional[dict]:
+    """``min_size`` and ``max_size`` (``[w, h]`` in mm or None) of a ``@panel``-decorated recipe.
+
+    Read with ``ast``, without importing; both must be literals. None if the recipe
+    has no ``@panel`` with either.
+    """
+    f = module_file(project, recipe)
+    name = recipe.partition(":")[2]
+    if f is None or not name or "." in name:
+        return None
+    try:
+        tree = ast.parse(f.read_bytes(), filename=str(f))
+    except (OSError, SyntaxError, ValueError):
+        return None
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != name:
+            continue
+        for dec in node.decorator_list:
+            fn = dec.func if isinstance(dec, ast.Call) else None
+            if (fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None) != "panel":
+                continue
+            out: dict = {"min_size": None, "max_size": None}
+            for kw in dec.keywords:
+                if kw.arg in out:
+                    try:
+                        v = ast.literal_eval(kw.value)
+                        out[kw.arg] = [float(v[0]), float(v[1])]
+                    except (ValueError, TypeError, IndexError):
+                        pass
+            return out if out["min_size"] or out["max_size"] else None
+    return None
+
+
+def outside(rng: Optional[dict], w: float, h: float, tol: float = 0.05) -> bool:
+    """Whether (w, h) in mm lies outside a ``size_range``."""
+    if not rng:
+        return False
+    lo, hi = rng.get("min_size"), rng.get("max_size")
+    return bool((lo and (w < lo[0] - tol or h < lo[1] - tol)) or (hi and (w > hi[0] + tol or h > hi[1] + tol)))
 
 
 def _defines(node: ast.AST, name: str) -> bool:

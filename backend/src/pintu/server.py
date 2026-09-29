@@ -1,4 +1,5 @@
-"""FastAPI app: board REST API, preview push over WebSocket, file browser, recipe renders."""
+"""FastAPI app: board REST API, preview push over WebSocket, file browser, recipe renders,
+agent sessions and the MCP server."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -26,7 +27,7 @@ from .board import Board, BoardError
 from .catalog import Catalog
 from .kernel import KernelRunner
 from .project import BOARD_SUFFIX, IMAGE_KINDS, PathError, Project
-from .recipes import Runner, locate, module_file
+from .recipes import Runner, locate, module_file, outside, size_range
 from .render import Renderer
 from .renders import Renders, file_version
 
@@ -50,6 +51,28 @@ class RecipeRef(BaseModel):
     recipe: str
 
 
+class NewSession(BaseModel):
+    kind: str = "prompt"
+    board: Optional[str] = None
+    panel: Optional[str] = None
+    prompt: Optional[str] = None
+    size: Optional[list[float]] = None
+    oldSize: Optional[list[float]] = None
+    path: Optional[str] = None
+    parentId: Optional[str] = None
+    title: Optional[str] = None
+
+
+class Prompt(BaseModel):
+    prompt: str
+    size: Optional[list[float]] = None
+
+
+class TurnRef(BaseModel):
+    turn: Optional[int] = None
+    conflicts: str = "fail"
+
+
 class State:
     """Open boards, their revisions and connected clients."""
 
@@ -70,6 +93,66 @@ class State:
                                save=lambda: self.writer.submit(self.renders.cache.save))
         self.renderer = Renderer(project, recipe_svg=self.renders.shown, pack=self.pack)
         self._meta: dict[tuple, Optional[dict]] = {}
+        self._ranges: dict[tuple, Optional[dict]] = {}
+        self.sessions = None  # a sessions.SessionManager, set by create_app
+
+    def size_range(self, recipe: str) -> Optional[dict]:
+        """``recipes.size_range`` of a recipe, cached by module file mtime."""
+        f = module_file(self.project, recipe)
+        try:
+            key = (recipe, f.stat().st_mtime_ns) if f else None
+        except OSError:
+            key = None
+        if key is None:
+            return None
+        if key not in self._ranges:
+            self._ranges[key] = size_range(self.project, recipe)
+        return self._ranges[key]
+
+    async def apply(self, name: str, ops: list[dict]) -> dict:
+        """Applies board ops, saves and publishes; starts "Adapt to size" sessions for recipe
+        panels resized outside their size range. Returns ``warnings`` and ``adaptSessions``.
+
+        Raises:
+            BoardError: An op is invalid (also PathError, KeyError, TypeError, ValueError).
+        """
+        async with self.lock:
+            before = self.get(name)
+            board = Board.loads(before.dumps(), self.pack)
+            warnings = apply_ops(self.project, board, ops)
+            self.save(name, board)
+            await self.publish(name)
+        started = []
+        if self.sessions is not None and any(op.get("op") in ("set_cell", "split", "set_page", "set_letter")
+                                             for op in ops):
+            await asyncio.to_thread(lambda: self.writer.submit(lambda: None).result())  # agents read the file
+            started = await self.sessions.on_resize(name, before, board)
+        return {"warnings": warnings, "adaptSessions": started}
+
+    def files_changed(self, paths: list[str]) -> None:
+        """Reloads boards and re-renders recipe panels after agent edits or a revert."""
+        with contextlib.suppress(RuntimeError):
+            asyncio.get_running_loop().create_task(self._reload(paths))
+
+    async def _reload(self, paths: list[str]) -> None:
+        async with self.lock:
+            for name in list(self.boards):
+                path = self.project.board_path(name)
+                rel = self.project.relative(path)
+                if rel in paths and path.is_file() and self.pending[name] == 0:
+                    text = path.read_text(encoding="utf-8")
+                    if text != self.text.get(name) and text != self.boards[name].dumps():
+                        try:
+                            self.boards[name] = Board.loads(text, self.pack)
+                        except BoardError as e:
+                            await self.broadcast({"type": "error", "name": name, "message": str(e)})
+                            continue
+                        self.text[name] = text
+                        self.rev[name] = self.rev.get(name, 0) + 1
+                        await self.publish(name)
+                        continue
+                if any(p.endswith(".py") for p in paths) and self.renders.sync(name, self.boards[name]):
+                    await self.publish(name)
 
     def multiples_meta(self, recipe: str) -> Optional[dict]:
         """``item`` and ``min_cell`` of a ``@multiples`` recipe, cached by file mtime; None for others."""
@@ -138,7 +221,7 @@ class State:
                 "kind": kind if f else None,
                 "group": grp["id"] if grp else None,
                 **({"params": src.get("params") or {}, "render": self.render_view(name, p["id"]),
-                    **self.multiples_view(b, p)}
+                    "sizeRange": self.size_range_view(b, p), **self.multiples_view(b, p)}
                    if "recipe" in src else {}),
             })
         units = b.unit_letters()
@@ -178,6 +261,14 @@ class State:
                 "reflow": mult.reflow(m, w, h, min_cell, margins),
             }
         return out
+
+    def size_range_view(self, b: Board, p: dict) -> Optional[dict]:
+        """A recipe panel's ``@panel`` size range and whether its size lies outside it (the size badge)."""
+        rng = self.size_range(str(p["source"]["recipe"]))
+        if not rng:
+            return None
+        _, _, w, h = b.content_rect(p)
+        return {"min": rng["min_size"], "max": rng["max_size"], "outside": outside(rng, w, h)}
 
     def render_view(self, name: str, pid: str) -> dict:
         """Render status of a recipe panel for the frontend."""
@@ -310,7 +401,16 @@ def open_command(path: Path, line: int) -> Optional[list[str]]:
     return [*shlex.split(editor), f"+{line}", str(path)] if editor else None
 
 
-def create_app(project: Project, dev: bool = False, watch: bool = True, runner: Optional[Runner] = None) -> FastAPI:
+def default_llm(profile: Optional[str] = None, config: Optional[str] = None) -> Callable[[], Any]:
+    """An LLM factory for sessions: the profile from llm.toml (see ``llm.load_profile``)."""
+    def make():
+        from .llm import LLM, load_profile
+        return LLM(load_profile(profile, config))
+    return make
+
+
+def create_app(project: Project, dev: bool = False, watch: bool = True, runner: Optional[Runner] = None,
+               llm_factory: Optional[Callable[[], Any]] = None, mcp: bool = True) -> FastAPI:
     """Builds the app for a project.
 
     Args:
@@ -319,9 +419,19 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
         watch: Reload boards when their files change on disk, and re-render
             recipe panels when Python files change.
         runner: Recipe runner; defaults to a ``KernelRunner``.
+        llm_factory: Model client for agent sessions; defaults to ``default_llm()``.
+        mcp: Serve the MCP server over streamable HTTP at ``/mcp``.
     """
+    from . import mcp_server
+    from .sessions import SessionError, SessionManager, promote_source
+
     state = State(project, runner)
     catalog = Catalog(project)
+    sessions = SessionManager(project, state.renders, llm_factory or default_llm(), notify=state.broadcast,
+                              on_files=state.files_changed)
+    state.sessions = sessions
+    mcp_app = mcp_server.build(state) if mcp else None
+    mcp_http = mcp_app.streamable_http_app(streamable_http_path="/mcp") if mcp_app else None
 
     async def watcher() -> None:
         project.boards_dir.mkdir(exist_ok=True)
@@ -361,7 +471,11 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
         state.renders.start()
         tasks = [asyncio.create_task(watcher()), asyncio.create_task(recipe_watcher()),
                  asyncio.create_task(gallery.watch(catalog, state.broadcast))] if watch else []
-        yield
+        async with contextlib.AsyncExitStack() as stack:
+            if mcp_app is not None:
+                await stack.enter_async_context(mcp_app.session_manager.run())
+            yield
+            await sessions.close()
         for task in tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -400,15 +514,67 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
 
     @app.post("/api/boards/{name}/ops")
     async def post_ops(name: str, req: Ops):
-        async with state.lock:
-            try:
-                board = Board.loads(state.get(name).dumps(), state.pack)
-                warnings = apply_ops(project, board, req.ops)
-            except (BoardError, PathError, KeyError, TypeError, ValueError) as e:
-                raise HTTPException(400, str(e))
-            state.save(name, board)
-            await state.publish(name)
-        return {**state.view(name), "opWarnings": warnings}
+        try:
+            out = await state.apply(name, req.ops)
+        except (BoardError, PathError, KeyError, TypeError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        return {**state.view(name), "opWarnings": out["warnings"], "adaptSessions": out["adaptSessions"]}
+
+    def _sessions(fn, *args, **kw):
+        try:
+            return fn(*args, **kw)
+        except SessionError as e:
+            raise HTTPException(e.status, e.detail)
+
+    async def _asessions(coro):
+        try:
+            return await coro
+        except SessionError as e:
+            raise HTTPException(e.status, e.detail)
+
+    @app.get("/api/sessions")
+    def list_sessions(board: Optional[str] = None, panel: Optional[str] = None):
+        return sessions.list(board, panel)
+
+    @app.get("/api/sessions/status")
+    def sessions_status():
+        return sessions.status()
+
+    @app.post("/api/sessions")
+    async def new_session(req: NewSession):
+        return await _asessions(sessions.create(req.kind, req.board, req.panel, req.prompt, req.size, req.oldSize,
+                                                req.path, req.parentId, req.title))
+
+    @app.get("/api/sessions/{sid}")
+    def get_session(sid: str):
+        return _sessions(sessions.get, sid)
+
+    @app.get("/api/sessions/{sid}/diff")
+    def session_diff(sid: str, turn: Optional[int] = None):
+        return _sessions(sessions.diff, sid, turn)
+
+    @app.post("/api/sessions/{sid}/prompt")
+    async def session_prompt(sid: str, req: Prompt):
+        return await _asessions(sessions.prompt(sid, req.prompt, req.size))
+
+    @app.post("/api/sessions/{sid}/abort")
+    async def session_abort(sid: str):
+        return await _asessions(sessions.abort(sid))
+
+    @app.post("/api/sessions/{sid}/accept")
+    def session_accept(sid: str, req: Optional[TurnRef] = None):
+        return _sessions(sessions.accept, sid, req.turn if req else None)
+
+    @app.post("/api/sessions/{sid}/revert")
+    def session_revert(sid: str, req: Optional[TurnRef] = None):
+        req = req or TurnRef()
+        return _sessions(sessions.revert, sid, req.turn, req.conflicts)
+
+    @app.get("/api/promote/source")
+    def promote_info(path: str):
+        info = _sessions(promote_source, project, path)
+        return {k: info[k] for k in ("path", "script", "recipe", "params", "size")} | {
+            "module": info["fields"]["module_file"], "suggestedRecipe": info["fields"]["recipe"]}
 
     @app.get("/api/boards/{name}/preview.svg")
     async def preview_svg(name: str):
@@ -498,6 +664,9 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
             pass
         finally:
             state.clients.discard(sock)
+
+    if mcp_http is not None:
+        app.router.routes.extend(mcp_http.routes)
 
     if not dev and (STATIC / "index.html").exists():
         app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")

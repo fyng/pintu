@@ -15,3 +15,14 @@ def test_cache_memoizes_by_args():
     cache_clear()
     cache(load, 2)
     assert calls == [2, 2, [1], 2]
+
+
+def test_panel_decorator_keeps_function():
+    from pintu_sdk import panel
+
+    @panel(min_size=(40, 25), max_size=(183, 80))
+    def f(w, h):
+        return w * h
+
+    assert f(2, 3) == 6
+    assert f.__pintu_panel__["min_size"] == (40, 25) and f.__pintu_panel__["max_size"] == (183, 80)
