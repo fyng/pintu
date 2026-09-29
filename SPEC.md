@@ -49,7 +49,7 @@ touches stage 1 only through the gallery.
 - **Platforms:** desktop installers for Windows and macOS; a headless server for
   Linux and remote machines.
 - **Python only** for plot code.
-- **Independent repo.** pintu works without `academic-design-system`. Journal
+- **Independent repo.** pintu works without the `kare` design guide. Journal
   presets, letters, fonts and lint rules come from style packs (§10). Users may
   bring their own plotting code; the LLM reads it like any other code.
 - **Snap-only grid,** fine enough to feel smooth (§6).
@@ -148,7 +148,7 @@ per axis (default `N = 36`, set per board).
 **Grid lines.** Line `i` sits at `i · p`, with pitch `p = (L + g) / N` and `L` the
 page width or height. A panel between lines `a` and `b` starts at `a · p` and is
 `(b − a) · p − g` long. For any division `n` that divides `N`, this gives the same
-cells as `fig-span(L, n, i, k)` in `academic-design-system`. `N = 36` covers halves,
+cells as `fig-span(L, n, i, k)` in `kare`. `N = 36` covers halves,
 thirds, quarters, sixths, ninths, twelfths and eighteenths, so thirds nested in thirds
 land exactly. One unit is 5.2 mm at 183 mm. Fifths come from a multiples panel's
 inner grid (§8).
@@ -473,8 +473,12 @@ unknown name gives the default preset). Typst compiles with the pack's font
 folders, and the recipe kernel registers them with matplotlib. The agent gets
 the pack's rules as text (§9). `examples/stylepacks/strict/` mirrors a design
 system's rules (5–6 pt tick labels, 1–3 pt ticks, 0.25–1 pt axes).
-`academic-design-system` adds its own pack under `formats/publication/pintu/`;
-its matplotlib binding (now `design.py` in OncoTraj) moves there as well.
+**kare.** `kare` (github.com/fyng/kare, MIT) is a pure design guide: it has
+no knowledge of pintu and holds no plotting code. pintu implements kare's style
+itself, as a `kare` pack and matplotlib settings in pintu, cited to a kare
+version. Tests check the pack against a kare checkout when one is present.
+kare adopts pintu's letter model: a 5 mm letter band that the plot never
+enters.
 
 ## 11. Distribution
 
@@ -532,7 +536,7 @@ before the build starts:
 | Step | Delivers | Exit test |
 |---|---|---|
 | B1 | Gallery and catalog, sidecars, parameter filters, multiples panels, groups | Browse 300 patient timelines; drag 3 into one multiples panel and reorder them |
-| B2 | Lint, style packs, the `academic-design-system` pack | Design-system rules flag a panel with 4 pt ticks |
+| B2 | Lint, style packs, the `kare` pack | Design-system rules flag a panel with 4 pt ticks |
 | B3 | Chat panel with session manager (list, status, stop, trace; §9 "Harness choice"), checkpoints, diff view, Promote to recipe, MCP server | A full stage 1 → 3 loop on one figure without leaving pintu |
 | B4 | Release hardening: first-run wizard, updater, docs, CI screenshot tests on WebKit and WebView2 | v1.0 tagged; a new user builds a figure from the example project |
 | B5 | Layout templates | – |
@@ -661,8 +665,8 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
   `examples/stylepacks/strict/`: a recipe with 4 pt tick labels is flagged
   (`tick-labels`, `font`), one with 4 pt tick marks (`tick-length`); a clean
   recipe passes. Preview latency on the demo boards unchanged (median 30–39 ms
-  against 40–44 ms before, same host). The real `academic-design-system` pack
-  is pending in its own repo.
+  against 40–44 ms before, same host). The `kare` pack, built in pintu from
+  kare's reference, is pending (§10).
 
 **Known bugs and gaps**
 
