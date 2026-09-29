@@ -1,0 +1,18 @@
+version: 1
+page: {width: 183, height: 170, grid: [36, 36], gutter: 3, style: nature}
+panels:
+  - id: trends
+    cell: [0, 0, 18, 11]
+    source: {recipe: "recipes.groups:trends"}
+  - id: composition
+    cell: [18, 0, 36, 11]
+    source: {recipe: "recipes.composition:stacked"}
+  - id: signal
+    cell: [0, 11, 18, 22]
+    source: {recipe: "recipes.signal:trace"}
+  - id: ranking
+    cell: [18, 11, 36, 22]
+    source: {recipe: "recipes.ranking:scores"}
+  - id: boxes
+    cell: [0, 22, 18, 33]
+    source: {recipe: "recipes.dist:boxes", params: {n: 40}}

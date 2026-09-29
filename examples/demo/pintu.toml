@@ -1,0 +1,6 @@
+# pintu project settings.
+[project]
+style = "nature"
+
+[gallery]
+paths = ["plots", "scratch", "pintu_out"]

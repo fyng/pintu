@@ -1,0 +1,48 @@
+[project]
+name = "pintu"
+version = "0.1.0.dev0"
+description = "Storyboard app for academic figures"
+license = "MIT"
+authors = [{ name = "The pintu authors" }]
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "watchfiles>=0.21",
+    "ruamel.yaml>=0.18",
+    "typst>=0.13",
+    "openai>=1.40",
+    "tomli>=2; python_version < '3.11'",
+    "jupyter-client>=8",
+    "mcp>=2.2",
+]
+
+[project.scripts]
+pintu = "pintu.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "matplotlib>=3.8",
+    "ipykernel>=6",
+    "pintu-sdk",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pintu"]
+# The frontend build is git-ignored but ships in the wheel.
+artifacts = ["src/pintu/static/**"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../typst/board.typ" = "pintu/typst/board.typ"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv.sources]
+pintu-sdk = { path = "../sdk", editable = true }

@@ -1,0 +1,12 @@
+version: 1
+page: {width: 183, height: 150, grid: [36, 36], gutter: 3, style: nature}
+panels:
+  - id: km
+    cell: [0, 0, 18, 18]
+    source: {recipe: recipes.km:km, params: {groups: 2}}
+  - id: dumbbell
+    cell: [18, 0, 36, 18]
+    source: {recipe: recipes.dumbbell:dumbbell, params: {n: 10}}
+  - id: timeline
+    cell: [0, 18, 36, 36]
+    source: {recipe: recipes.timeline:timeline, params: {patient: P03}}   # wide: adds the lab track

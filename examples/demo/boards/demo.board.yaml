@@ -1,0 +1,15 @@
+version: 1
+page: {width: 183, height: 120, grid: [36, 36], gutter: 3, style: nature}
+panels:
+  - id: lines
+    cell: [0, 0, 18, 18]
+    source: {file: plots/lines.pdf}
+  - id: scatter
+    cell: [18, 0, 36, 18]
+    source: {file: plots/scatter.svg}
+  - id: bars
+    cell: [0, 18, 12, 36]
+    source: {file: plots/bars.pdf}
+  - id: heatmap
+    cell: [12, 18, 36, 36]
+    source: {file: plots/heatmap.png}   # raster: sits below the letter zone
