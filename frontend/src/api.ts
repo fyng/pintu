@@ -20,6 +20,14 @@ export interface Panel {
   /** Item param of a `@multiples` recipe, else null (recipe panels only). */
   multiplesItem?: string | null;
   multiples?: Multiples;
+  /** The recipe's `@panel` size range (recipe panels only; null without one). */
+  sizeRange?: SizeRange | null;
+}
+
+export interface SizeRange {
+  min: [number, number] | null;
+  max: [number, number] | null;
+  outside: boolean;
 }
 
 export type ShareMode = "all" | "row" | "col" | "none";
@@ -77,6 +85,8 @@ export interface BoardView {
   groups: Group[];
   warnings: string[];
   opWarnings?: string[];
+  /** Adapt to size sessions a board edit started. */
+  adaptSessions?: string[];
 }
 
 export interface Entry {

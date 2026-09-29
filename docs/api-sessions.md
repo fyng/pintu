@@ -110,6 +110,7 @@ panel or file) or 409 (busy, or a revert conflict).
 | `POST /api/sessions/{id}/accept` | `{"turn": n}?` (default: all open turns; accepts turns ≤ n) | `{"session", "accepted": [n…]}` |
 | `POST /api/sessions/{id}/revert` | `{"turn": n?, "conflicts": "fail"}` (reverts open turns ≥ n; default all) | `{"session", "reverted": [n…], "restored": [path…], "conflicts": [Conflict]}` |
 | `GET /api/promote/source` | `?path=<gallery item>` | `{path, script, recipe, params, size, module, suggestedRecipe}`; 400 if the script is not known |
+| `GET /api/llm` | – | `{"configured": true, "profile", "model", "tools", "vision"}`, or `{"configured": false, "error": "no LLM config at …"}` |
 
 `NewSession`:
 
@@ -127,6 +128,10 @@ panel or file) or 409 (busy, or a revert conflict).
   "title": null
 }
 ```
+
+Without an LLM profile, `POST /api/sessions` with a prompt (and any adapt or promote) is a
+400 (`cannot start the agent: …`) and no session is created; `GET /api/llm` tells the chat
+panel so beforehand.
 
 A prompt about a panel whose source is a static file runs without the recipe context; the
 panel is named in the prompt. The 409 for a busy panel has

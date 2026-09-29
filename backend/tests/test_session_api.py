@@ -111,6 +111,21 @@ def test_promote_source_endpoint(project):
         assert c.get("/api/promote/source", params={"path": "nope.png"}).status_code == 404
 
 
+def test_llm_status(project):
+    app, _ = app_for(project, [])
+    with TestClient(app) as c:
+        assert c.get("/api/llm").json() == {"configured": True, "profile": "fake", "model": "m", "tools": True,
+                                            "vision": False}
+
+    def missing():
+        raise RuntimeError("no LLM config at /nowhere/llm.toml")
+    app = create_app(project, watch=False, runner=SubprocessRunner(project), llm_factory=missing)
+    with TestClient(app) as c:
+        assert c.get("/api/llm").json() == {"configured": False, "error": "no LLM config at /nowhere/llm.toml"}
+        r = c.post("/api/sessions", json={"kind": "prompt", "prompt": "hi"})
+        assert r.status_code == 400 and "no LLM config" in r.json()["detail"]
+
+
 def _text(res):
     return "".join(getattr(p, "text", "") for p in res.content)
 

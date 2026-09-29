@@ -1,7 +1,8 @@
 import { useDroppable } from "@dnd-kit/core";
 import { useEffect, useRef, useState } from "react";
-import { api, type Panel, type RenderStatus } from "../api";
+import { api, type Panel, type RenderStatus, type SizeRange } from "../api";
 import { coarseLines, dragCell, lineAt, overlaps, rect, sameCell, type Cell, type Handle } from "../geometry";
+import { useSessions } from "../sessions";
 import { useStore } from "../store";
 
 const MARGIN = 6;
@@ -125,8 +126,10 @@ export function Canvas() {
                   </text>
                 )}
               </svg>
-              {p.render && (p.render.status !== "ok" || p.render.lint?.length) && <RenderBadge x={x + w} y={y} status={p.render} />}
+              {p.render && (p.render.status !== "ok" || !!p.render.lint?.length) && <RenderBadge x={x + w} y={y} status={p.render} />}
               <rect className="body" x={x} y={y} width={w} height={h} onPointerDown={(e) => down(e, p, "move")} />
+              {p.sizeRange && !drag && <SizeBadge x={x} y={y + h} range={p.sizeRange}
+                adapt={() => useSessions.getState().create({ kind: "adapt", board: board.name, panel: p.id })} />}
               {(["n", "s", "e", "w", "ne", "nw", "se", "sw"] as Handle[]).map((hd) => {
                 const hx = hd.includes("w") ? x - EDGE / 2 : hd.includes("e") ? x + w - EDGE / 2 : x + EDGE / 2;
                 const hy = hd.includes("n") ? y - EDGE / 2 : hd.includes("s") ? y + h - EDGE / 2 : y + EDGE / 2;
@@ -179,6 +182,22 @@ function RenderBadge({ x, y, status }: { x: number; y: number; status: RenderSta
       <title>{tip}</title>
       <rect x={x - bw - 0.5} y={y + 0.5} width={bw} height={3.4} rx={0.8} />
       <text x={x - bw / 2 - 0.5} y={y + 2.9}>{label}</text>
+    </g>
+  );
+}
+
+const fmt = (s: [number, number] | null) => (s ? `${s[0]}×${s[1]}` : "–");
+
+/** The recipe's `@panel` size range at a panel's bottom-left corner; outside it, a click adapts the recipe. */
+function SizeBadge({ x, y, range, adapt }: { x: number; y: number; range: SizeRange; adapt: () => void }) {
+  const label = `${fmt(range.min)} – ${fmt(range.max)} mm${range.outside ? " · Adapt" : ""}`;
+  const bw = label.length * 1.35 + 2;
+  return (
+    <g className={`badge ${range.outside ? "badge-outside" : "badge-size"}`} data-testid="size-badge" data-outside={range.outside}
+      onPointerDown={(e) => e.stopPropagation()} onClick={() => range.outside && adapt()}>
+      <title>{range.outside ? "The panel is outside the recipe's size range: click to adapt the recipe to this size" : "Recipe size range"}</title>
+      <rect x={x + 0.5} y={y - 3.9} width={bw} height={3.4} rx={0.8} />
+      <text x={x + 0.5 + bw / 2} y={y - 1.5}>{label}</text>
     </g>
   );
 }

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api, type BoardView, type Op } from "./api";
 import type { Cell } from "./geometry";
+import { useSessions } from "./sessions";
 
 interface Preview {
   svg: string;
@@ -71,6 +72,7 @@ export const useStore = create<State>((set, get) => ({
       const cur = get().board;
       if (!cur || board.rev >= cur.rev) set({ board });
       set({ error: null, warnings: board.opWarnings ?? [] });
+      useSessions.getState().started(board.adaptSessions ?? []);
     } catch (e) {
       set({ error: (e as Error).message, pendingSince: null });
       await get().load(b.name);
@@ -78,6 +80,8 @@ export const useStore = create<State>((set, get) => ({
   },
 
   onMessage: (msg) => {
+    // Session events go to the chat store only, so they do not re-render the canvas.
+    if (msg.type.startsWith("session.") || msg.type.startsWith("part.")) return useSessions.getState().onEvent(msg);
     const b = get().board;
     if (msg.type === "board" && b && msg.board.name === b.name && msg.board.rev >= b.rev) {
       set({ board: msg.board });
@@ -110,6 +114,7 @@ export function connect() {
     if (b) queue.push({ type: "open", name: b.name });
     queue.forEach((m) => ws!.send(JSON.stringify(m)));
     queue = [];
+    useSessions.getState().refresh();
   };
   ws.onmessage = (e) => useStore.getState().onMessage(JSON.parse(e.data));
   ws.onclose = () => setTimeout(connect, 1000);

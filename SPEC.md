@@ -493,6 +493,34 @@ fixed.
 - Sessions persist in `.pintu/sessions/<id>.json`; after a restart a busy session
   comes back idle, its turn closed as interrupted.
 
+**Chat panel as built** (`frontend/src/sessions.ts`, `components/Chat.tsx`):
+
+- An "Agent" tab in the left sidebar, which widens while it is open. It lists
+  sessions, newest first, with children nested under their parent. Each row shows
+  its status: idle, busy, or retry with the attempt and a countdown. An open session
+  shows its turns and parts: reasoning and tool calls collapsed, tool input and
+  output, and the patch.
+- Session events live in their own store, apart from the board store, so part
+  events do not re-render the canvas.
+- Diffs are rendered from the unified diff in each `patch` part, with line numbers.
+  The CodeMirror merge view is not used: it needs both full texts, and the API sends
+  diffs. It would also add a dependency.
+- Accept and Revert work per turn: Accept takes turns up to n, and "Revert from
+  here" reverts turns n and later. A revert conflict lists the files and offers
+  "keep those" (skip) or overwrite. Stop aborts the turn. Trace shows the raw
+  session and parts. Tool images are not stored, so a tool part only notes that an
+  image went to the model.
+- Entry points:
+  - the prompt box, bound to the selected panel unless unticked;
+  - "Prompt…" in the inspector;
+  - the size-range badge on recipe panels (bottom left, red when the panel is outside
+    the range; a click adapts), and "Adapt to size" in the inspector;
+  - a notice for Adapt sessions started by a resize;
+  - "Promote to recipe" on a clicked gallery item whose script is known, then
+    "Place on board" in the first free cell.
+- Without an LLM profile (`GET /api/llm`), the panel says so and the entry points
+  are disabled.
+
 ## 10. Style packs
 
 A style pack is a folder with `stylepack.toml`. The schema, documented and
@@ -713,7 +741,7 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
   recipe passes. Preview latency on the demo boards unchanged (median 30–39 ms
   against 40–44 ms before, same host). The `kare` pack, built in pintu from
   kare's reference, is pending (§10).
-- [ ] B3 Chat panel, sessions, checkpoints, Promote to recipe, MCP server.
+- [x] B3 Chat panel, sessions, checkpoints, Promote to recipe, MCP server.
   - [x] Backend: session manager (parts, status, abort, children, persistence),
     checkpoints on a hidden git ref or `.pintu/` copies (P4's clean-tree rule is
     gone), diff, accept, revert and staged revert with conflict detection, the three
@@ -728,16 +756,32 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
     6 steps, revert restores the promoted recipe and keeps the layout); an `mcp`
     client drives the four tools over HTTP and stdio. The promoted recipe declared
     a one-size range (min = max), so the prompt now asks for a range.
-  - [ ] Chat panel (session list, live parts, stop, trace, diff with Accept and
-    Revert, size badge, Promote button), then the exit test in the browser.
+  - [x] Chat panel (§9 "Chat panel as built"): session list with
+    status and children, live parts, stop, trace, diff with per-turn Accept and
+    staged Revert with conflicts, size badge and Adapt to size, Promote to recipe
+    and place, and `GET /api/llm` for the no-profile message. Tests: vitest for the
+    session store (events, part merge, status, turns, conflicts). Playwright
+    `e2e/chat.spec.ts` and `e2e/exit.spec.ts` run on a scripted
+    OpenAI-compatible endpoint (`e2e/fake-llm.mjs`), after the other specs.
+  - [x] Exit test in the browser on GLM-5.3-Flash (`e2e/exit.spec.ts` with
+    `PINTU_E2E_PROFILE=glm`), 3.4 min in all:
+    - pick `plots/lines.pdf` in the gallery and promote it (12 steps, 86 s);
+    - accept, place and render the recipe;
+    - widen the panel to 183 mm; an Adapt to size session starts (8 steps, 111 s),
+      adds a `w >= 140` rule and widens the range;
+    - accept.
+
+    A first run stalled after the placement: the page kept a stale render badge
+    while the server showed the render ok. The rerun passed, and the stall has not
+    been reproduced.
 - [ ] kare integration (§10). Phase A, pack schema without a kare checkout,
-  done: `[pack] schema` and `source`; `pintu stylepack check` and the notes cap; tests find kare via `PINTU_KARE_DIR`, `../kare`,
-  then `../academic-design-system`; per-preset `fonts`, `lint` and
-  `matplotlib` overrides; `letter.color` and `font`; `[matplotlib] rc` in the
-  kernel; `[margins.scale]`. The default pack's board Typst, compiled SVG and
-  PDF, render cache keys and output paths are unchanged; preview latency
-  unchanged (median 28–32 ms both before and after). Phase B, the `kare` pack
-  and its drift test, is next.
+  done: `[pack] schema` and `source`; `pintu stylepack check` and the notes cap;
+  tests find kare via `PINTU_KARE_DIR`, `../kare`, then `../academic-design-system`;
+  per-preset `fonts`, `lint` and `matplotlib` overrides; `letter.color` and
+  `font`; `[matplotlib] rc` in the kernel; `[margins.scale]`. The default pack's
+  board Typst, compiled SVG and PDF, render cache keys and output paths are
+  unchanged; preview latency unchanged (median 28–32 ms both before and after).
+  Phase B, the `kare` pack and its drift test, waits for kare's MIT licence.
 
 **Known bugs and gaps**
 
@@ -750,8 +794,9 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
 - The demo timeline recipe draws a 7.2 pt label, which lint flags.
 - Preview tail latency on the network filesystem reaches 362 ms; file-existence
   checks in codegen are the likely cause, not yet measured.
-- Not built: undo, typed cell entry, board rename and delete, the min/max size
-  badge in the frontend (the backend sends `sizeRange`).
+- Not built: undo, typed cell entry, board rename and delete.
+- `e2e/gallery.spec.ts` and `e2e/multiples.spec.ts` race, since both drop timelines
+  and renders join the catalog; most runs fail one of them, before B3 too.
 
 **Dev setup notes**
 

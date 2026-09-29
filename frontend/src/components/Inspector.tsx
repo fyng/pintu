@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState } from "react";
 import type { Panel } from "../api";
 import { splitExact } from "../geometry";
+import { useSessions } from "../sessions";
 import { useStore } from "../store";
 import { MultiplesEditor } from "./MultiplesEditor";
 
@@ -97,6 +98,10 @@ export function Inspector() {
       <div className="row">
         {p.source.file && <button onClick={() => commit([{ op: "set_source", id: p.id, file: null }])}>Clear source</button>}
         <button onClick={() => { select(null); commit([{ op: "remove", id: p.id }]); }}>Delete</button>
+        <button data-testid="panel-prompt" onClick={() => {
+          useSessions.setState({ tab: "chat", open: null });
+          setTimeout(() => document.querySelector<HTMLTextAreaElement>("[data-testid=prompt-input]")?.focus());
+        }}>Prompt…</button>
       </div>
     </div>
   );
@@ -149,6 +154,7 @@ function RecipeSection({ p }: { p: Panel }) {
             </span>
             <button onClick={() => setCode(true)} disabled={r?.status === "missing"}>Open code</button>
           </div>
+          {p.sizeRange && <SizeRangeRow p={p} />}
           {r?.status === "ok" && !!r.lint?.length && (
             <ul className="lint" data-testid="lint">
               {r.lint.map((i, k) => <li key={k}><b>{i.rule}</b> {i.message}</li>)}
@@ -158,6 +164,23 @@ function RecipeSection({ p }: { p: Panel }) {
           {code && <Suspense fallback={null}><CodeView recipe={recipe} onClose={() => setCode(false)} /></Suspense>}
         </>
       )}
+    </div>
+  );
+}
+
+/** The recipe's `@panel` size range, and "Adapt to size" (highlighted when the panel lies outside it). */
+function SizeRangeRow({ p }: { p: Panel }) {
+  const board = useStore((s) => s.board!.name);
+  const llm = useSessions((s) => s.llm);
+  const r = p.sizeRange!;
+  const fmt = (v: [number, number] | null) => (v ? `${v[0]} × ${v[1]}` : "–");
+  return (
+    <div className="row" data-testid="size-range">
+      <span className={r.outside ? "warn" : "meta"}>
+        Size range {fmt(r.min)} to {fmt(r.max)} mm{r.outside ? ": this panel is outside it" : ""}
+      </span>
+      <button data-testid="adapt" disabled={llm?.configured === false} title={llm?.configured === false ? "No LLM profile" : undefined}
+        onClick={() => useSessions.getState().create({ kind: "adapt", board, panel: p.id })}>Adapt to size</button>
     </div>
   );
 }

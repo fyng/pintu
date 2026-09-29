@@ -570,6 +570,16 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
         req = req or TurnRef()
         return _sessions(sessions.revert, sid, req.turn, req.conflicts)
 
+    @app.get("/api/llm")
+    def llm_status():
+        """Whether agent sessions can start: the LLM profile, or why there is none."""
+        try:
+            prof = sessions.llm_factory().profile
+        except Exception as e:
+            return {"configured": False, "error": str(e)}
+        return {"configured": True, "profile": prof.name, "model": prof.model, "tools": prof.tools,
+                "vision": prof.vision}
+
     @app.get("/api/promote/source")
     def promote_info(path: str):
         info = _sessions(promote_source, project, path)
