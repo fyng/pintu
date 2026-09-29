@@ -1,6 +1,6 @@
 import { useDroppable } from "@dnd-kit/core";
 import { useEffect, useRef, useState } from "react";
-import { api, type Panel } from "../api";
+import { api, type Panel, type RenderStatus } from "../api";
 import { coarseLines, dragCell, lineAt, overlaps, rect, sameCell, type Cell, type Handle } from "../geometry";
 import { useStore } from "../store";
 
@@ -111,7 +111,7 @@ export function Canvas() {
               <svg x={x} y={y} width={w} height={h} overflow="hidden">
                 <rect className="panel-bg" width={w} height={h} />
                 {p.file ? (
-                  <image href={api.thumbUrl(p.file)} y={top} width={w} height={Math.max(0, h - top)} preserveAspectRatio="xMidYMid meet" />
+                  <image href={api.thumbUrl(p.file, p.fileVersion)} y={top} width={w} height={Math.max(0, h - top)} preserveAspectRatio="xMidYMid meet" />
                 ) : (
                   <text className="placeholder" x={zone + 0.5} y={4}>
                     {p.source.recipe ? `recipe ${p.source.recipe}` : p.source.file ? `missing ${p.source.file}` : p.id}
@@ -123,6 +123,7 @@ export function Canvas() {
                   </text>
                 )}
               </svg>
+              {p.render && p.render.status !== "ok" && <RenderBadge x={x + w} y={y} status={p.render} />}
               <rect className="body" x={x} y={y} width={w} height={h} onPointerDown={(e) => down(e, p, "move")} />
               {(["n", "s", "e", "w", "ne", "nw", "se", "sw"] as Handle[]).map((hd) => {
                 const hx = hd.includes("w") ? x - EDGE / 2 : hd.includes("e") ? x + w - EDGE / 2 : x + EDGE / 2;
@@ -144,5 +145,24 @@ export function Canvas() {
         })}
       </svg>
     </div>
+  );
+}
+
+const BADGE: Record<string, [string, string]> = {
+  rendering: ["rendering…", "badge-rendering"],
+  error: ["render error", "badge-error"],
+  missing: ["missing recipe", "badge-missing"],
+};
+
+/** Render state of a recipe panel, at its top-right corner. */
+function RenderBadge({ x, y, status }: { x: number; y: number; status: RenderStatus }) {
+  const [label, cls] = BADGE[status.status];
+  const bw = label.length * 1.35 + 2;
+  return (
+    <g className={`badge ${cls}`} data-testid="render-badge" data-status={status.status}>
+      <title>{status.error ?? label}</title>
+      <rect x={x - bw - 0.5} y={y + 0.5} width={bw} height={3.4} rx={0.8} />
+      <text x={x - bw / 2 - 0.5} y={y + 2.9}>{label}</text>
+    </g>
   );
 }

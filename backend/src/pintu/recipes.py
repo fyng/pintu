@@ -8,6 +8,7 @@ render; the kernel runner implements the same ``Runner`` protocol. Both run
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import json
@@ -144,3 +145,52 @@ class SubprocessRunner:
     async def close(self) -> None:
         """Nothing to release."""
 
+
+def module_file(project: Project, recipe: str) -> Optional[Path]:
+    """The recipe module's source file under the project root, or None."""
+    mod = recipe.partition(":")[0]
+    if not mod or not all(part.isidentifier() for part in mod.split(".")):
+        return None
+    base = project.root.joinpath(*mod.split("."))
+    for f in (base.with_suffix(".py"), base / "__init__.py"):
+        if f.is_file():
+            return f
+    return None
+
+
+def code_hash(project: Project, recipe: str) -> Optional[str]:
+    """sha256 of the recipe module's file, as ``worker.code_hash`` computes it."""
+    f = module_file(project, recipe)
+    return hashlib.sha256(f.read_bytes()).hexdigest() if f else None
+
+
+def locate(project: Project, recipe: str) -> Optional[tuple[Path, int]]:
+    """The file and 1-based line of the recipe's ``def``, or None if it is missing.
+
+    Resolves ``Class.method`` paths and top-level assignments without importing.
+    A file that does not parse gives the syntax error's line, so the render
+    reports the error rather than a missing recipe.
+    """
+    f = module_file(project, recipe)
+    name = recipe.partition(":")[2]
+    if f is None or not name:
+        return None
+    try:
+        body = ast.parse(f.read_bytes(), filename=str(f)).body
+    except SyntaxError as e:
+        return f, e.lineno or 1
+    node = None
+    for part in name.split("."):
+        node = next((n for n in body if _defines(n, part)), None)
+        if node is None:
+            return None
+        body = getattr(node, "body", [])
+    return f, node.lineno
+
+
+def _defines(node: ast.AST, name: str) -> bool:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return node.name == name
+    if isinstance(node, ast.Assign):
+        return any(isinstance(t, ast.Name) and t.id == name for t in node.targets)
+    return False

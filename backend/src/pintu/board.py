@@ -208,6 +208,30 @@ class Board:
         else:
             p["source"] = _flow_map({"file": file})
 
+    def set_recipe(self, pid: str, recipe: str, params: Optional[dict] = None) -> None:
+        """Sets a panel's recipe source (``module:function``) and its params.
+
+        Args:
+            pid: Panel id.
+            recipe: ``module.path:function``.
+            params: Keyword arguments; None keeps the current ones, {} clears them.
+        """
+        mod, _, fn = recipe.partition(":")
+        if not mod or not fn:
+            raise BoardError(f"recipe must be 'module:function', got {recipe!r}")
+        p = self.panel(pid)
+        src = p.get("source")
+        if not isinstance(src, dict):
+            src = p["source"] = _flow_map({})
+        src.pop("file", None)
+        src["recipe"] = recipe
+        if params == {}:
+            src.pop("params", None)
+        elif params is not None:
+            if not isinstance(params, dict):
+                raise BoardError("params must be a mapping")
+            src["params"] = _flow_map(dict(params))
+
     def set_letter(self, pid: str, letter: Any) -> None:
         """Sets a panel's letter: a string, None for no letter, "auto" to clear the override."""
         p = self.panel(pid)

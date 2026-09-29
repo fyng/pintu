@@ -8,7 +8,27 @@ export interface Panel {
   letterSetting: string | null;
   source: { file?: string; recipe?: string };
   file: string | null;
+  fileVersion: number | null;
   kind: "vector" | "raster" | null;
+  /** Recipe panels only. */
+  params?: Record<string, unknown>;
+  render?: RenderStatus;
+}
+
+export interface RenderStatus {
+  status: "rendering" | "ok" | "error" | "missing";
+  seconds?: number;
+  cached?: boolean;
+  error?: string;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface RecipeLocation {
+  recipe: string;
+  file: string;
+  line: number;
+  text: string;
 }
 
 export interface BoardView {
@@ -48,6 +68,9 @@ export const api = {
   newBoard: (name: string) => post("/api/boards", { name }).then((r) => json<BoardView>(r)),
   ops: (name: string, ops: Op[]) => post(`/api/boards/${encodeURIComponent(name)}/ops`, { ops }).then((r) => json<BoardView>(r)),
   files: (path: string) => fetch(`/api/files?path=${encodeURIComponent(path)}`).then((r) => json<{ entries: Entry[] }>(r)),
-  thumbUrl: (path: string) => `/api/thumb?path=${encodeURIComponent(path)}`,
+  thumbUrl: (path: string, version?: number | null) =>
+    `/api/thumb?path=${encodeURIComponent(path)}${version ? `&v=${version}` : ""}`,
+  locate: (recipe: string) => fetch(`/api/recipes/locate?recipe=${encodeURIComponent(recipe)}`).then((r) => json<RecipeLocation>(r)),
+  openRecipe: (recipe: string) => post("/api/recipes/open", { recipe }).then((r) => json<{ opened: boolean; command: string | null }>(r)),
   pdfUrl: (name: string) => `/api/boards/${encodeURIComponent(name)}/preview.pdf`,
 };

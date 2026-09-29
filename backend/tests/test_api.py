@@ -19,7 +19,7 @@ def flush(client):
 
 
 def test_project_and_board(client):
-    assert client.get("/api/project").json()["boards"] == ["demo"]
+    assert client.get("/api/project").json()["boards"] == ["demo", "recipes"]
     b = client.get("/api/boards/demo").json()
     assert b["page"]["grid"] == [36, 36]
     assert [p["letter"] for p in b["panels"]] == ["a", "b", "c", "d"]

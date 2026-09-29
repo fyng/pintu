@@ -20,8 +20,14 @@ def typst_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def panel_source(panel: dict, exists: Callable[[str], bool]) -> tuple[Optional[str], str, str]:
+def panel_source(panel: dict, exists: Callable[[str], bool],
+                 recipe_svg: Optional[Callable[[dict], Optional[str]]] = None) -> tuple[Optional[str], str, str]:
     """How to draw a panel's source.
+
+    Args:
+        panel: The panel mapping.
+        exists: Whether a project-relative file exists and is inside the root.
+        recipe_svg: The rendered SVG to show for a recipe panel, if any.
 
     Returns:
         (root-relative file or None, kind "vector"/"raster", placeholder label).
@@ -37,17 +43,22 @@ def panel_source(panel: dict, exists: Callable[[str], bool]) -> tuple[Optional[s
             return None, kind, f"{pid}: missing file {f}"
         return f, kind, pid
     if "recipe" in src:
+        f = recipe_svg(panel) if recipe_svg else None
+        if f and exists(f):
+            return f, "vector", pid
         return None, "vector", f"{pid}: recipe {src['recipe']} (not rendered yet)"
     return None, "vector", pid
 
 
-def generate(board: Board, exists: Callable[[str], bool], name: str = "") -> str:
+def generate(board: Board, exists: Callable[[str], bool], name: str = "",
+             recipe_svg: Optional[Callable[[dict], Optional[str]]] = None) -> str:
     """Typst source for a board.
 
     Args:
         board: The board.
         exists: Whether a project-relative file exists and is inside the root.
         name: Board name, for the header comment.
+        recipe_svg: The rendered SVG to show for a recipe panel, if any.
     """
     page = board.page
     st = styles.get(board.style)
@@ -63,7 +74,7 @@ def generate(board: Board, exists: Callable[[str], bool], name: str = "") -> str
         f"#show: board-page.with(width: W, height: H, font: {fonts}, size: {_num(st['font_size_pt'])}pt)",
     ]
     for p in board.panels:
-        f, kind, label = panel_source(p, exists)
+        f, kind, label = panel_source(p, exists, recipe_svg)
         letter = letters.get(p["id"])
         if letter is not None and lt["lower"]:
             letter = letter.lower()

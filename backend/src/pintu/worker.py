@@ -70,6 +70,19 @@ def _bbox_mm(bb, fig_h_in: float, dpi: float) -> list[float]:
     return [round(v * MM, 2) for v in (x0, fig_h_in - y1, x1, fig_h_in - y0)]
 
 
+def _undrawn_ticklabels(fig) -> set[int]:
+    """Ids of tick labels outside their axis' view limits, which matplotlib does not draw."""
+    ids = set()
+    for ax in fig.axes:
+        for axis in (ax.xaxis, ax.yaxis):
+            lo, hi = sorted(axis.get_view_interval())
+            eps = (hi - lo) * 1e-9
+            for tick in axis.get_major_ticks() + axis.get_minor_ticks():
+                if not lo - eps <= tick.get_loc() <= hi + eps:
+                    ids.update((id(tick.label1), id(tick.label2)))
+    return ids
+
+
 def summarize(fig) -> dict:
     """Text summary of a figure for lint and text-only models.
 
@@ -101,8 +114,9 @@ def summarize(fig) -> dict:
         })
     texts, overflow = [], []
     from matplotlib.text import Text
+    undrawn = _undrawn_ticklabels(fig)
     for t in fig.findobj(Text):
-        if not t.get_visible() or not t.get_text().strip():
+        if not t.get_visible() or not t.get_text().strip() or id(t) in undrawn:
             continue
         bb = _bbox_mm(t.get_window_extent(renderer), h_in, fig.dpi)
         item = {"text": t.get_text()[:80], "fontsize_pt": round(float(t.get_fontsize()), 2), "bbox_mm": bb}

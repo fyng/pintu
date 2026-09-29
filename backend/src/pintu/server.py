@@ -1,4 +1,4 @@
-"""FastAPI app: board REST API, preview push over WebSocket, file browser."""
+"""FastAPI app: board REST API, preview push over WebSocket, file browser, recipe renders."""
 
 from __future__ import annotations
 
@@ -6,6 +6,10 @@ import asyncio
 import collections
 import contextlib
 import logging
+import os
+import shlex
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
@@ -14,12 +18,15 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from watchfiles import awatch
+from watchfiles import PythonFilter, awatch
 
 from . import codegen, style as styles
 from .board import Board, BoardError
+from .kernel import KernelRunner
 from .project import BOARD_SUFFIX, IMAGE_KINDS, PathError, Project
+from .recipes import Runner, locate
 from .render import Renderer
+from .renders import Renders, file_version
 
 log = logging.getLogger("pintu")
 STATIC = Path(__file__).parent / "static"
@@ -37,12 +44,15 @@ class Ops(BaseModel):
     ops: list[dict[str, Any]]
 
 
+class RecipeRef(BaseModel):
+    recipe: str
+
+
 class State:
     """Open boards, their revisions and connected clients."""
 
-    def __init__(self, project: Project):
+    def __init__(self, project: Project, runner: Optional[Runner] = None):
         self.project = project
-        self.renderer = Renderer(project)
         self.boards: dict[str, Board] = {}
         self.rev: dict[str, int] = {}
         self.written: dict[str, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=32))
@@ -50,6 +60,9 @@ class State:
         self.writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pintu-writer")
         self.clients: set[WebSocket] = set()
         self.lock = asyncio.Lock()
+        self.renders = Renders(project, runner or KernelRunner(project), self._rendered,
+                               save=lambda: self.writer.submit(self.renders.cache.save))
+        self.renderer = Renderer(project, recipe_svg=self.renders.shown)
 
     def get(self, name: str) -> Board:
         if name not in self.boards:
@@ -58,6 +71,7 @@ class State:
                 raise HTTPException(404, f"no board {name!r}")
             self.boards[name] = Board.load(path)
             self.rev[name] = 1
+            self.renders.sync(name, self.boards[name])
         return self.boards[name]
 
     def save(self, name: str, board: Board) -> None:
@@ -84,9 +98,9 @@ class State:
         if page.height > st["max_height"]:
             warnings.append(f"page height {page.height:g} mm exceeds the {st['name']} cap of {st['max_height']:g} mm")
         for p in b.panels:
-            f, kind, label = codegen.panel_source(p, self.file_ok)
+            f, kind, label = codegen.panel_source(p, self.file_ok, lambda q: self.renders.shown(name, q))
             src = dict(p.get("source") or {})
-            if f is None and label != p["id"]:
+            if f is None and label != p["id"] and "recipe" not in src:
                 warnings.append(label)
             setting = p.get("letter", "auto")
             panels.append({
@@ -97,7 +111,10 @@ class State:
                 "letterSetting": None if setting is None or setting is False else setting,
                 "source": {k: src[k] for k in ("file", "recipe") if k in src},
                 "file": f,
+                "fileVersion": file_version(self.project, f),
                 "kind": kind if f else None,
+                **({"params": src.get("params") or {}, "render": self.render_view(name, p["id"])}
+                   if "recipe" in src else {}),
             })
         return {
             "name": name,
@@ -110,6 +127,24 @@ class State:
             "warnings": warnings,
         }
 
+    def render_view(self, name: str, pid: str) -> dict:
+        """Render status of a recipe panel for the frontend."""
+        st = self.renders.get(name, pid)
+        if st is None:
+            return {"status": "rendering"}
+        res = st.result
+        out = {"status": st.status}
+        if res is not None:
+            out.update(seconds=round(res.seconds, 3), cached=res.cached)
+            if st.status == "error":
+                out.update(error=res.error, stdout=res.stdout[-4000:], stderr=res.stderr[-4000:])
+        return out
+
+    async def _rendered(self, name: str) -> None:
+        async with self.lock:
+            if name in self.boards:
+                await self.publish(name)
+
     async def broadcast(self, msg: dict) -> None:
         for ws in list(self.clients):
             try:
@@ -118,7 +153,8 @@ class State:
                 self.clients.discard(ws)
 
     async def publish(self, name: str) -> None:
-        """Pushes board state, then the compiled SVG preview, then writes the PDF."""
+        """Queues recipe renders, pushes board state and the compiled SVG preview, then writes the PDF."""
+        self.renders.sync(name, self.boards[name])
         await self.broadcast({"type": "board", "board": self.view(name)})
         rev, board = self.rev[name], self.boards[name]
         try:
@@ -159,6 +195,8 @@ def apply_ops(state: State, board: Board, ops: list[dict]) -> list[str]:
             board.remove_panel(op["id"])
         elif kind == "set_source":
             board.set_source_file(op["id"], _check_file(state, op.get("file")))
+        elif kind == "set_recipe":
+            board.set_recipe(op["id"], str(op["recipe"]), op.get("params"))
         elif kind == "set_letter":
             board.set_letter(op["id"], op.get("letter"))
         elif kind == "split":
@@ -173,15 +211,26 @@ def apply_ops(state: State, board: Board, ops: list[dict]) -> list[str]:
     return warnings
 
 
-def create_app(project: Project, dev: bool = False, watch: bool = True) -> FastAPI:
+def open_command(path: Path, line: int) -> Optional[list[str]]:
+    """Command that opens a file at a line in the user's editor: ``code -g``, else ``$EDITOR``."""
+    code = shutil.which("code")
+    if code:
+        return [code, "-g", f"{path}:{line}"]
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    return [*shlex.split(editor), f"+{line}", str(path)] if editor else None
+
+
+def create_app(project: Project, dev: bool = False, watch: bool = True, runner: Optional[Runner] = None) -> FastAPI:
     """Builds the app for a project.
 
     Args:
         project: The open project.
         dev: Skip serving the built frontend (Vite serves it).
-        watch: Reload boards when their files change on disk.
+        watch: Reload boards when their files change on disk, and re-render
+            recipe panels when Python files change.
+        runner: Recipe runner; defaults to a ``KernelRunner``.
     """
-    state = State(project)
+    state = State(project, runner)
 
     async def watcher() -> None:
         project.boards_dir.mkdir(exist_ok=True)
@@ -207,15 +256,25 @@ def create_app(project: Project, dev: bool = False, watch: bool = True) -> FastA
                     state.rev[name] = state.rev.get(name, 0) + 1
                     await state.publish(name)
 
+    async def recipe_watcher() -> None:
+        ignore = [project.root / d for d in (".pintu", "pintu_out", "boards")]
+        async for _ in awatch(project.root, watch_filter=PythonFilter(ignore_paths=ignore)):
+            async with state.lock:
+                for name, board in list(state.boards.items()):
+                    if state.renders.sync(name, board):
+                        await state.publish(name)
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        task = asyncio.create_task(watcher()) if watch else None
+        state.renders.start()
+        tasks = [asyncio.create_task(watcher()), asyncio.create_task(recipe_watcher())] if watch else []
         yield
-        state.writer.shutdown(wait=True)
-        if task:
+        for task in tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await state.renders.stop()
+        state.writer.shutdown(wait=True)
 
     app = FastAPI(title="pintu", lifespan=lifespan)
     app.state.pintu = state
@@ -238,7 +297,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True) -> FastA
         return state.view(req.name)
 
     @app.get("/api/boards/{name}")
-    def get_board(name: str):
+    async def get_board(name: str):
         try:
             return state.view(name)
         except (BoardError, PathError) as e:
@@ -267,6 +326,31 @@ def create_app(project: Project, dev: bool = False, watch: bool = True) -> FastA
         pdf = await asyncio.to_thread(state.renderer.compile, src, "pdf")
         return Response(pdf, media_type="application/pdf",
                         headers={"Content-Disposition": f'inline; filename="{name}.pdf"'})
+
+    def _locate(recipe: str) -> tuple[Path, int]:
+        where = locate(project, recipe)
+        if where is None:
+            raise HTTPException(404, f"recipe {recipe!r} not found under the project root")
+        return where
+
+    @app.get("/api/recipes/locate")
+    def recipe_locate(recipe: str):
+        path, line = _locate(recipe)
+        return {"recipe": recipe, "file": project.relative(path), "line": line,
+                "text": path.read_text(encoding="utf-8", errors="replace")}
+
+    @app.post("/api/recipes/open")
+    def recipe_open(req: RecipeRef):
+        path, line = _locate(req.recipe)
+        cmd = open_command(path, line)
+        if cmd is None:
+            return {"opened": False, "command": None}
+        try:
+            subprocess.Popen(cmd, cwd=project.root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            raise HTTPException(500, f"cannot run {cmd[0]}: {e}")
+        return {"opened": True, "command": shlex.join(cmd)}
 
     @app.get("/api/files")
     def list_files(path: str = ""):

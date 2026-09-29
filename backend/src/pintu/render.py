@@ -6,7 +6,7 @@ import threading
 import time
 from importlib import resources
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import typst
 
@@ -33,10 +33,15 @@ class Renderer:
 
     One typst Compiler is kept per project, so fonts and files stay cached
     between compiles. Previews compile from memory; only `write` touches disk.
+
+    Args:
+        project: The project.
+        recipe_svg: ``(board name, panel) -> SVG path`` of a recipe panel's render.
     """
 
-    def __init__(self, project: Project):
+    def __init__(self, project: Project, recipe_svg: Optional[Callable[[str, dict], Optional[str]]] = None):
         self.project = project
+        self.recipe_svg = recipe_svg
         self._compiler = typst.Compiler(root=str(project.root))
         self._lock = threading.Lock()
         self._thumbs: dict[tuple[str, float], bytes] = {}
@@ -57,7 +62,8 @@ class Renderer:
 
     def source(self, name: str, board: Board) -> str:
         """The generated Typst source for a board."""
-        return codegen.generate(board, self._exists, name)
+        shown = (lambda p: self.recipe_svg(name, p)) if self.recipe_svg else None
+        return codegen.generate(board, self._exists, name, shown)
 
     def compile(self, source: str, fmt: str = "svg") -> bytes:
         """Compiles generated source to SVG (first page) or PDF."""

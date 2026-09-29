@@ -38,6 +38,6 @@ def test_list_dir(demo):
 
 
 def test_board_names(demo):
-    assert Project.open(demo).board_names() == ["demo"]
+    assert Project.open(demo).board_names() == ["demo", "recipes"]
     with pytest.raises(PathError):
         Project.open(demo).board_path("../x")

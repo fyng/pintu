@@ -28,7 +28,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState();
-      if (e.target instanceof HTMLInputElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if ((e.key === "Delete" || e.key === "Backspace") && s.selected) {
         commit([{ op: "remove", id: s.selected }]);
         s.select(null);

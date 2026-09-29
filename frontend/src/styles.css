@@ -45,3 +45,16 @@ line.fine { stroke: #d5dde8; stroke-width: 0.12; }
 .preview { padding: 8px 10px; }
 .preview .bar { display: flex; gap: 6px; font-size: 12px; color: #555; margin-bottom: 4px; }
 .preview img { width: 100%; border: 1px solid #ddd; background: #fff; }
+.badge { pointer-events: none; }
+.badge text { font-size: 2.2px; text-anchor: middle; fill: #fff; font-family: sans-serif; }
+.badge-rendering rect { fill: #5577aa; }
+.badge-error rect { fill: #c0392b; }
+.badge-missing rect { fill: #d68910; }
+.recipe textarea { width: 100%; font-family: monospace; font-size: 12px; }
+.recipe input { width: 100%; font-family: monospace; }
+.render-error { color: #c0392b; white-space: pre-wrap; font-size: 11px; max-height: 12em; overflow: auto; }
+.modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.modal > div { background: #fff; width: min(900px, 90vw); height: 80vh; display: flex; flex-direction: column; padding: 8px; gap: 6px; }
+.modal .cm { flex: 1; overflow: hidden; border: 1px solid #ccc; }
+.modal .cm .cm-editor { height: 100%; }
+.cm-def-line { background: #fff3c4; }
