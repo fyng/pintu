@@ -125,6 +125,7 @@ class Reply:
 _THINK = re.compile(r"<think>.*?</think>", re.S)
 _BLOCK = re.compile(r"<tool_call>(.*?)(?:</tool_call>|$)", re.S)
 _FENCE = re.compile(r"```\w*\s*(.*?)```", re.S)
+_NAME = re.compile(r'"(?:name|tool)"\s*:\s*"(\w+)"')
 _GLM_ARG = re.compile(r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.S)
 
 
@@ -189,6 +190,52 @@ def _glm_call(chunk: str) -> list[dict]:
     return [{"name": name, "arguments": args}]
 
 
+def _repair(chunk: str) -> Optional[Any]:
+    """The chunk as JSON after appending missing closers at the end, or None."""
+    stack, in_str, esc = [], False, False
+    for ch in chunk:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if not stack or stack.pop() != ch:
+                return None
+    if in_str or not stack:
+        return None
+    try:
+        return json.loads(chunk + "".join(reversed(stack)))
+    except json.JSONDecodeError:
+        return None
+
+
+def _chunk_calls(chunk: str) -> list[dict]:
+    """Calls in one chunk; a broken JSON call comes back as ``{"name", "error"}``."""
+    calls = [c for obj in _objects(chunk) for c in _as_calls(obj)] or _glm_call(chunk)
+    body = chunk.strip()
+    if calls or not body.startswith("{") or not _NAME.search(body):
+        return calls
+    calls = _as_calls(_repair(body))
+    if calls:
+        return calls
+    try:
+        json.loads(body)
+        return []
+    except json.JSONDecodeError as e:
+        name = _NAME.search(body).group(1)
+        return [{"name": name, "arguments": {}, "error":
+                 f"your {name} call is not valid JSON ({e.msg} at line {e.lineno} column {e.colno}, "
+                 f"char {e.pos} of {len(body)}); nothing was run. Resend the call as valid JSON, "
+                 "with every brace and quote closed and newlines in strings escaped as \\n."}]
+
+
 def parse_text_calls(text: str) -> list[ToolCall]:
     """Tool calls written as JSON in the text.
 
@@ -196,16 +243,16 @@ def parse_text_calls(text: str) -> list[ToolCall]:
     ``tool_call_json`` fences; some servers strip ``<tool_call>``), then bare JSON; each
     holding ``{"name", "arguments"}`` (or ``tool``/``args``), a list of those, or
     ``{"tool_calls": [...]}``. A ``<tool_call>`` block may also hold GLM's native
-    ``name<arg_key>..</arg_key><arg_value>..</arg_value>`` form.
+    ``name<arg_key>..</arg_key><arg_value>..</arg_value>`` form. A call missing only its
+    final closers is repaired; any other broken JSON call comes back with ``error`` set.
     """
     text = _THINK.sub("", text)
     chunks = _BLOCK.findall(text) if "<tool_call>" in text else (_FENCE.findall(text) or [text])
-    calls = [c for chunk in chunks
-             for c in ([c for obj in _objects(chunk) for c in _as_calls(obj)] or _glm_call(chunk))]
+    calls = [c for chunk in chunks for c in _chunk_calls(chunk)]
     out = []
     for k, c in enumerate(calls):
         args, err = _args(c["arguments"])
-        out.append(ToolCall(id=f"call_{k}", name=c["name"], arguments=args, error=err))
+        out.append(ToolCall(id=f"call_{k}", name=c["name"], arguments=args, error=c.get("error") or err))
     return out
 
 

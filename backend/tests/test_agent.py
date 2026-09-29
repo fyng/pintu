@@ -167,6 +167,33 @@ def test_parse_text_calls():
     assert [c.name for c in unclosed] == ["g"]
 
 
+# Trimmed from the P4 text-kernel eval (2-halve-width): the fence misses its final "}".
+BROKEN = ('I\'ll rewrite it. ```tool_call_json\n{"name": "edit_file", "arguments": {"path": '
+          '"recipes/composition.py", "old_string": "    ax.legend(frameon=False, title=\\"Cell type\\")\\n'
+          '    return fig", "new_string": "    if w < 60:\\n        ax.set_xlim(0, 1)  # {not a brace}\\n'
+          '    return fig"}\n```')
+
+
+def test_parse_repairs_missing_closers():
+    [c] = parse_text_calls(BROKEN)
+    assert c.name == "edit_file" and c.error is None
+    assert c.arguments["path"] == "recipes/composition.py" and "{not a brace}" in c.arguments["new_string"]
+    [c] = parse_text_calls('```tool_call_json\n{"name": "a", "arguments": {"xs": [1, {"y": "]}"}\n```')
+    assert c.arguments == {"xs": [1, {"y": "]}"}]}
+
+
+def test_parse_unrepairable_call_is_error(project):
+    [c] = parse_text_calls('```tool_call_json\n{"name": "edit_file", "arguments": {"path": "a" "b"}}\n```')
+    assert c.name == "edit_file" and "not valid JSON" in c.error and "line 1 column 49" in c.error
+    assert parse_text_calls("```python\nd = {1: 2\n```") == []
+    bad = BROKEN.replace('"path": ', '"path" ')
+    a, client = make(project, [text(bad), text("Done.")], tools=False)
+    r = asyncio.run(a.run("halve it"))
+    assert r.stopped == "done" and r.steps == 2
+    sent = client.requests[1]["messages"][-1]["content"]
+    assert "Result of edit_file" in str(sent) and "not valid JSON" in str(sent)
+
+
 def test_inline_think_stripped(project):
     llm = LLM(Profile("fake", "u", "m", tools=False),
               client=FakeClient([text('<think>maybe {"name": "x", "arguments": {}}</think>Done.')]))
@@ -206,14 +233,26 @@ def test_edit_file_unique(project):
     a, _ = make(project, [])
     before = (project.root / RECIPE).read_text()
     out, _ = asyncio.run(a.call("edit_file", {"path": RECIPE, "old_string": '"lw": 0.5', "new_string": "x"}))
-    assert "matches 3 times" in out
+    assert "matches 3 times" in out and "starting at lines" in out
     out, _ = asyncio.run(a.call("edit_file", {"path": RECIPE, "old_string": "nope", "new_string": "x"}))
-    assert "matches 0 times" in out
+    assert "matches 0 times" in out and "Closest region" in out
     out, _ = asyncio.run(a.call("edit_file", {"path": RECIPE, "old_string": "", "new_string": "x"}))
     assert out.startswith("error:")
     assert (project.root / RECIPE).read_text() == before
     out, _ = asyncio.run(a.call("edit_file", {"path": RECIPE, "old_string": "widths=0.5", "new_string": "widths=0.6"}))
     assert out.startswith("ok") and "widths=0.6" in (project.root / RECIPE).read_text()
+
+
+def test_edit_miss_hint():
+    text = "a = 1\ndef f(w, h):\n    x = 2\n    y = 3\n    return x\n"
+    out = ag.edit_miss(text, "def f(w, h):\n  x = 2\n  y = 3")
+    assert "lines 2-4" in out and "    4|     y = 3" in out and "indentation differs" in out
+    assert "different order" in ag.edit_miss(text, "    y = 3\n    x = 2")
+    out = ag.edit_miss(text, "    x = 2\n    y = 4")
+    assert "First difference at line 4" in out and "'    y = 4'" in out
+    big = "\n".join(f"line {i}" for i in range(100))
+    out = ag.edit_miss(big, "\n".join(f"line {i}" for i in range(10, 60)) + "x")
+    assert "[20 more lines]" in out and len(out) < 3000
 
 
 def test_set_cell_and_get_board(project):

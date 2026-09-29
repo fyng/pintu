@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import json
 import re
 import subprocess
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -117,6 +119,36 @@ TOOLS = [
 
 class ToolError(Exception):
     """A tool call the agent should see as an error result."""
+
+
+def edit_miss(text: str, old: str, cap: int = 30) -> str:
+    """Where old most nearly matches text, with line numbers, and how it differs."""
+    lines, want = text.splitlines(), old.strip("\n").splitlines()
+    n = max(len(want), 1)
+    bag = Counter(ln.strip() for ln in want)
+    best, start = (-1, -1.0), 0
+    for i in range(max(len(lines) - n + 1, 1)):
+        win = lines[i:i + n]
+        same = sum((Counter(ln.strip() for ln in win) & bag).values())
+        r = difflib.SequenceMatcher(None, "\n".join(win), "\n".join(want), autojunk=False).ratio()
+        if (same, r) > best:
+            best, start = (same, r), i
+    best = best[1]
+    got = lines[start:start + n]
+    if [ln.strip() for ln in got] == [ln.strip() for ln in want]:
+        why = "Same text, but whitespace or indentation differs."
+    elif sorted(ln.strip() for ln in got) == sorted(ln.strip() for ln in want):
+        why = "Same lines, but in a different order."
+    else:
+        k = next((k for k, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
+        why = (f"First difference at line {start + k + 1}: file has {got[k][:120]!r}"
+               if k < len(got) else "The file region is shorter.")
+        why += f", you sent {want[k][:120]!r}." if k < len(want) else "."
+    shown = [f"{start + j + 1:>5}| {ln[:200]}" for j, ln in enumerate(got[:cap])]
+    if len(got) > cap:
+        shown.append(f"[{len(got) - cap} more lines]")
+    return (f"Closest region (lines {start + 1}-{start + len(got)}, {best:.0%} similar):\n"
+            + "\n".join(shown) + f"\n{why} Copy old_string exactly from these lines.")
 
 
 def fmt_size(w: float, h: float) -> str:
@@ -406,9 +438,15 @@ class Agent:
             raise ToolError("old_string is empty")
         text = p.read_text(encoding="utf-8")
         n = text.count(old_string)
-        if n != 1:
-            raise ToolError(f"old_string matches {n} times in {path}; it must match exactly once"
-                            + ("" if n else " (check whitespace and indentation; read the file again)"))
+        if n > 1:
+            at, i = [], text.find(old_string)
+            while i >= 0 and len(at) < 10:
+                at.append(str(text.count("\n", 0, i) + 1))
+                i = text.find(old_string, i + 1)
+            raise ToolError(f"old_string matches {n} times in {path} (starting at lines {', '.join(at)}); "
+                            "it must match exactly once: include more surrounding lines")
+        if n == 0:
+            raise ToolError(f"old_string matches 0 times in {path}. " + edit_miss(text, old_string))
         p.write_text(text.replace(old_string, new_string, 1), encoding="utf-8")
         return f"ok: edited {path}"
 
