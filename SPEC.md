@@ -229,13 +229,15 @@ groups:                          # optional; members share one letter
 its recipe function and its item param value (`timeline-S002`), or the only param's
 value.
 
-**Sidecar**: `recipe`, `params`, `width_mm`, `height_mm`, `code_hash`, `git_sha`,
-`created`. A file's sidecar is `<name>.meta.json` beside it, else `meta.json` in its
-folder, which covers every output there.
+**Sidecar**: `recipe`, `params`, `width_mm`, `height_mm`, `code_hash`, `script`,
+`git_sha`, `created`. A file's sidecar is `<name>.meta.json` beside it, else `meta.json`
+in its folder, which covers every output there.
 
 - Scripts outside pintu write the per-file form with
   `pintu_sdk.save(fig, path, recipe=…, params=…)`; `code_hash` is computed as the
-  render worker does.
+  render worker does. `script` is the root-relative path of the script that drew the
+  file (default: the running `__main__` file, if under the root); "Promote to recipe"
+  (§9) reads it.
 - pintu's own renders write the folder form in `pintu_out/<recipe>/<param-hash>/`.
   Its size fields describe the newest render; each file's size comes from its
   `<w>x<h>` name.
@@ -299,7 +301,9 @@ def timeline(w, h, patient):
 4. Typst recompiles the board, and the frontend swaps the image in.
 
 **Size range.** Outside `min_size`/`max_size`, the panel shows a badge and an
-"Adapt to size" button (§9).
+"Adapt to size" button (§9). pintu reads both from `@panel` with `ast` (literal tuples,
+no import); the board view gives each recipe panel `sizeRange: {min, max, outside}`.
+A resize that takes a panel outside its range starts an "Adapt to size" session.
 
 **Multiples.** One lettered panel holds several sub-plots drawn by one function,
 arranged from the board. The recipe draws one item on one axes:
@@ -400,8 +404,11 @@ The protocol is Chat Completions with `tools` and image content parts.
 | Action | Starts from | Does |
 |---|---|---|
 | Prompt | Chat panel, or a panel's menu | Any change to a recipe or the layout |
-| Adapt to size | The size badge (§8) | Edits the recipe to use the new size; adds a size rule rather than hard-coding one size |
-| Promote to recipe | A gallery item whose script is known | Wraps a scratch script into a recipe that takes (w, h) |
+| Adapt to size | The size badge (§8), or a resize outside the size range | Edits the recipe to use the new size; adds a size rule rather than hard-coding one size; widens the `@panel` range |
+| Promote to recipe | A gallery item whose script is known (sidecar `script`, else the module of its `recipe`) | Writes a new module `recipes/<name>.py` with a `@panel` recipe that takes (w, h) and draws that item's plot; the script is left as is |
+
+Each entry point starts a session (below); `pintu agent` and `pintu adapt` run one from
+the command line, and `pintu accept` / `pintu revert` end it.
 
 **Loop:** build the context, call the model, run its tool calls, and return the
 results. Repeat until the model stops or reaches the step cap (default 20).
@@ -412,7 +419,8 @@ results. Repeat until the model stops or reaches the step cap (default 20).
 | `edit_file` | Exact string replacement |
 | `render_panel(id, w?, h?)` | Render through the kernel; return lint results, and the image if `vision` |
 | `get_board`, `set_cell(id, cell)` | Read or change the layout |
-| `run_python(code)` | Run in the recipe kernel; off by default, turned on per project |
+| `run_python(code)` | Run in the recipe kernel; off by default, turned on per project (not built) |
+| `write_file`, `render_recipe(recipe, w, h)` | Promote sessions only: create a new file; render a recipe not on a board |
 
 **Context sent with each prompt:**
 
@@ -427,11 +435,26 @@ results. Repeat until the model stops or reaches the step cap (default 20).
 
 - Each agent turn starts with a checkpoint: a commit on a hidden git ref, or a file
   copy in `.pintu/` outside git.
-- The chat panel shows the diff, with Accept and Revert.
-- Edits outside the project root are refused.
+  - In git, the tracked working tree is committed with a temporary index onto
+    `refs/pintu/checkpoints/<session>/<turn>`; the user's index, HEAD and branches are
+    untouched. The content of each file the agent writes, just before its first write
+    in the turn and after each write, is kept as blobs on the same ref (untracked
+    files too). Outside git, the same contents are copies in
+    `.pintu/checkpoints/<session>/<turn>/`. No clean tree is needed.
+  - Revert restores only the files the agent wrote, newest turn first, to their
+    content before the turn; a file created by the agent is deleted. A file changed
+    since the agent's last write to it (the user's edit, another session, a layout
+    change in the board file) is a conflict: the revert changes nothing and reports
+    it, unless told to skip or overwrite such files. Accept drops the checkpoint.
+- The chat panel shows the diff (a `patch` part per turn), with Accept and Revert.
+- Edits outside the project root and inside `.git/` are refused.
 
 **MCP server.** Exposes the same operations (`get_board`, `set_cell`,
-`render_panel`, `lint`), so terminal agents can drive an open board.
+`render_panel`, `lint`), plus read-only `pintu://boards` resources, so terminal
+agents can drive an open board: over streamable HTTP at `/mcp` on the running
+`pintu serve` (acts on the open board), or over stdio with `pintu mcp --project .`
+(its own headless board state; board edits reach a running server through its file
+watch). The `mcp` Python SDK (MIT) serves both.
 
 **Harness choice.** pintu keeps its own loop. opencode (MIT) was assessed as an
 embedded harness on 2026-09-29 and not adopted:
@@ -450,6 +473,25 @@ stop and trace. A resize outside the size range starts a templated "Adapt to
 size" session. External agents, opencode among them, drive the board through
 the MCP server. Revisit embedding once opencode's v2 API is stable and #35432 is
 fixed.
+
+**Sessions as built** (`pintu/sessions.py`; the contract is `docs/api-sessions.md`):
+
+- A session is one agent conversation, optionally bound to a board panel; each
+  prompt is a turn, and a later prompt continues the same model history.
+- Parts: `text` (user or assistant), `reasoning`, `tool` (state pending, running,
+  done or error, with its output) and `patch` (the turn's diff per file).
+- Status map: idle, busy, or retry (a transient model error: connection, timeout,
+  429 or 5xx; up to three retries).
+- Abort cancels the running model call or tool (a kernel render is interrupted, a
+  subprocess render killed); unanswered tool calls get an "aborted" result, so the
+  history stays valid.
+- Child sessions carry a `parentId`; aborting a parent aborts its children. One
+  top-level session may be busy per panel; sessions on other panels run at once.
+- Staged revert undoes the turns from a given one on.
+- REST under `/api/sessions`; live progress on the board WebSocket (`session.created`,
+  `session.updated`, `session.status`, `part.added`, `part.updated`).
+- Sessions persist in `.pintu/sessions/<id>.json`; after a restart a busy session
+  comes back idle, its turn closed as interrupted.
 
 ## 10. Style packs
 
@@ -663,6 +705,24 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
   recipe passes. Preview latency on the demo boards unchanged (median 30–39 ms
   against 40–44 ms before, same host). The real `academic-design-system` pack
   is pending in its own repo.
+- [ ] B3 Chat panel, sessions, checkpoints, Promote to recipe, MCP server (branch
+  `b3-backend`).
+  - [x] Backend: session manager (parts, status, abort, children, persistence),
+    checkpoints on a hidden git ref or `.pintu/` copies (P4's clean-tree rule is
+    gone), diff, accept, revert and staged revert with conflict detection, the three
+    entry points, `@panel(min_size, max_size)` in `pintu-sdk` and `sizeRange` in the
+    board view, auto-started Adapt to size, sidecar `script`, MCP server (`mcp` 2.2,
+    HTTP at `/mcp` and `pintu mcp` stdio). API contract: `docs/api-sessions.md`.
+  - [x] Backend validation on GLM-5.3-Flash, `tools = true`: the P4 eval on
+    sessions, 5 of 5 automatic passes (4–8 steps, 73–285 s), session diffs cover the
+    same files as `git diff`; `scripts/stage_loop.py` on the demo passes (promote
+    `plots/lines.pdf` from `scripts/make_plots.py` in 11 steps, accept, place,
+    resize to full width, an Adapt to size session starts and edits the recipe in
+    6 steps, revert restores the promoted recipe and keeps the layout); an `mcp`
+    client drives the four tools over HTTP and stdio. The promoted recipe declared
+    a one-size range (min = max), so the prompt now asks for a range.
+  - [ ] Chat panel (session list, live parts, stop, trace, diff with Accept and
+    Revert, size badge, Promote button), then the exit test in the browser.
 
 **Known bugs and gaps**
 
@@ -676,7 +736,7 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
 - Preview tail latency on the network filesystem reaches 362 ms; file-existence
   checks in codegen are the likely cause, not yet measured.
 - Not built: undo, typed cell entry, board rename and delete, the min/max size
-  badge (cut from the prototype).
+  badge in the frontend (the backend sends `sizeRange`).
 
 **Dev setup notes**
 

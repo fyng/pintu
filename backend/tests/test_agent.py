@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -354,12 +353,3 @@ def test_load_profile(tmp_path, monkeypatch):
     with pytest.raises(Exception, match="no profile"):
         load_profile("c")
 
-
-def test_git_dirty(project):
-    root = project.root
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"], cwd=root, check=True)
-    assert ag.git_dirty(root) == []
-    (root / RECIPE).write_text("x")
-    assert ag.git_dirty(root) == [" M " + RECIPE]

@@ -14,6 +14,7 @@ dependencies = [
     "openai>=1.40",
     "tomli>=2; python_version < '3.11'",
     "jupyter-client>=8",
+    "mcp>=2.2",
 ]
 
 [project.scripts]

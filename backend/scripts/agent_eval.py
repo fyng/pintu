@@ -1,8 +1,9 @@
 """P4 exit-test harness: runs the agent on five set tasks and writes a report (SPEC §12.1).
 
 Each task copies ``tests/fixtures/agent`` into a fresh git repo, renders before,
-runs the agent, renders after, and records the diff, renders, lint, steps, tokens,
-time and automatic checks. Output: ``<out>/report.md``, ``<out>/results.json`` and
+runs the agent in a session (``sessions.SessionManager``: an "Adapt to size" or a
+prompt session), renders after, and records the session diff, renders, lint, steps,
+tokens, time and automatic checks. Output: ``<out>/report.md``, ``<out>/results.json`` and
 one folder per task.
 
     uv run python scripts/agent_eval.py --profile glm --out ../local/agent-eval/run1
@@ -24,6 +25,7 @@ from pathlib import Path
 from pintu import agent as ag
 from pintu.llm import LLM, load_profile
 from pintu.project import Project
+from pintu.sessions import SessionManager
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "agent"
 BOARD = "eval"
@@ -77,29 +79,42 @@ async def run_task(task: dict, profile, out: Path, max_steps: int) -> dict:
     renders = ag.local_renders(project)
     rec = {"task": task["name"], "panel": task["panel"], "old": task["old"], "new": task["new"],
            "expect": task["expect"]}
-    a = ag.Agent(project, BOARD, task["panel"], renders, LLM(profile), size=task["new"], old_size=task["old"],
-                 max_steps=max_steps,
-                 on_event=lambda r: r["type"] == "reply" and print(
-                     f"[{task['name']}] step {r['step']}: {r['seconds']:.0f} s -> "
-                     + (", ".join(c["name"] for c in r["tool_calls"]) or "done"), flush=True))
-    rec["prompt"] = task.get("prompt") or ag.adapt_prompt(task["panel"], task["old"], task["new"])
+    llm = LLM(profile)
+    a = ag.Agent(project, BOARD, task["panel"], renders, llm)  # before and after renders only
+    mgr = SessionManager(project, renders, lambda: llm, max_steps=max_steps,
+                         on_record=lambda r: r["type"] == "reply" and print(
+                             f"[{task['name']}] step {r['step']}: {r['seconds']:.0f} s -> "
+                             + (", ".join(c["name"] for c in r["tool_calls"]) or "done"), flush=True))
     rec["before"] = {"new": await render_png(a, task["new"], d / "before_new.png"),
                      "old": await render_png(a, task["old"], d / "before_old.png")}
     t0 = time.perf_counter()
     try:
-        res = await a.run(rec["prompt"])
-        rec.update(stopped=res.stopped, steps=res.steps, usage=res.usage, seconds=round(res.seconds, 1),
-                   tool_calls=res.tool_calls, final_text=res.text)
+        if task.get("prompt"):
+            s = await mgr.create("prompt", BOARD, task["panel"], task["prompt"], size=list(task["new"]))
+        else:
+            s = await mgr.create("adapt", BOARD, task["panel"], size=list(task["new"]), old_size=list(task["old"]))
+        rec["prompt"] = mgr.get(s["id"])["parts"][0]["text"]
+        s = await mgr.wait(s["id"])
+        res = s["result"] or {}
+        calls = [p["tool"] for p in mgr.get(s["id"])["parts"] if p["type"] == "tool"]
+        rec.update(session=s["id"], stopped=res.get("stopped"), steps=s["steps"], usage=s["usage"],
+                   seconds=res.get("seconds", round(time.perf_counter() - t0, 1)), tool_calls=calls,
+                   final_text=res.get("text") or s.get("error") or "")
+        if s.get("error"):
+            rec["error"] = s["error"]
+        transcript = project.root / s["transcript"]
+        if transcript.exists():
+            shutil.copy(transcript, d / "transcript.jsonl")
+        files = mgr.diff(s["id"])["files"]
+        diff = "".join(f["diff"] for f in files)
     except Exception:
         rec.update(stopped="error", error=traceback.format_exc()[-3000:], seconds=round(time.perf_counter() - t0, 1),
-                   steps=sum(1 for ln in a.transcript.read_text().splitlines() if '"type": "reply"' in ln)
-                   if a.transcript.exists() else 0)
-    if a.transcript.exists():
-        shutil.copy(a.transcript, d / "transcript.jsonl")
+                   steps=0, prompt=rec.get("prompt", ""))
+        diff, files = "", []
     rec["after"] = {"new": await render_png(a, task["new"], d / "after_new.png"),
                     "old": await render_png(a, task["old"], d / "after_old.png")}
     await renders.stop()
-    diff = git(root, "diff")
+    rec["git_files_match"] = sorted(git(root, "diff", "--name-only").split()) == sorted(f["path"] for f in files)
     (d / "diff.patch").write_text(diff)
     rec["diff"] = diff
     added = added_lines(diff)
@@ -175,7 +190,7 @@ async def main() -> None:
     write_report(out, profile, results)
     for r in results:
         print(f"{r['task']}: {'pass' if r['auto_pass'] else 'fail'} {r['checks']} "
-              f"steps={r['steps']} s={r['seconds']}")
+              f"steps={r['steps']} s={r['seconds']} files_match_git={r.get('git_files_match')}")
     print(f"report: {out / 'report.md'}")
 
 

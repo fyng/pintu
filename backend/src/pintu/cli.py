@@ -1,4 +1,5 @@
-"""Command line: ``pintu serve``, ``agent``, ``adapt``, ``login copilot`` and ``models copilot``."""
+"""Command line: ``pintu serve``, ``agent``, ``adapt``, ``accept``, ``revert``, ``mcp``,
+``login copilot`` and ``models copilot``."""
 
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ def _size(text: str) -> tuple[float, float]:
 
 
 def _agent_args(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--project", default=".", help="project folder, a clean git tree (default: .)")
+    ap.add_argument("--project", default=".", help="project folder (default: .)")
     ap.add_argument("--board", required=True, help="board name")
     ap.add_argument("--panel", required=True, help="panel id with a recipe source")
     ap.add_argument("--size", type=_size, help="target size WxH in mm (default: the cell size below the letter band)")
@@ -35,38 +36,51 @@ async def _run_agent(args, prompt: str | None) -> int:
     from . import agent as ag
     from .llm import LLM, load_profile
     from .project import Project
+    from .sessions import SessionError, SessionManager
 
     project = Project.open(args.project)
-    try:
-        dirty = ag.git_dirty(project.root)
-    except Exception:
-        print(f"pintu: {project.root} is not a git repository", file=sys.stderr)
-        return 2
-    if dirty:
-        print("pintu: commit or stash changes first; the agent needs a clean tree:\n" + "\n".join(dirty),
-              file=sys.stderr)
-        return 2
     llm = LLM(load_profile(args.profile, args.llm_config))
     renders = ag.local_renders(project)
+    mgr = SessionManager(project, renders, lambda: llm, on_record=_progress, max_steps=args.max_steps)
     try:
-        a = ag.Agent(project, args.board, args.panel, renders, llm, size=args.size, on_event=_progress,
-                     max_steps=args.max_steps)
-        if prompt is None:
-            recipe, params, _ = a.recipe(args.panel)
-            if not args.size:  # the cell changed since the last render
-                a.old_size = ag.last_size(project, recipe, params) or a.cell_size
-            prompt = ag.adapt_prompt(args.panel, a.old_size, a.size)
-        res = await a.run(prompt)
+        try:
+            s = await mgr.create("adapt" if prompt is None else "prompt", args.board, args.panel, prompt,
+                                 size=list(args.size) if args.size else None)
+        except SessionError as e:
+            print(f"pintu: {e}", file=sys.stderr)
+            return 2
+        a = mgr.agents[s["id"]]
+        s = await mgr.wait(s["id"])
         final, w, h = await a.render(args.panel)
     finally:
         await renders.stop()
-    print(res.text)
-    print(f"\n--- {res.stopped} after {res.steps} steps, {res.usage.get('total', 0)} tokens, {res.seconds:.0f} s")
-    print(f"transcript: {res.transcript}")
+    res = s["result"] or {}
+    print(res.get("text") or s.get("error") or "")
+    print(f"\n--- {res.get('stopped')} after {s['steps']} steps, {s['usage'].get('total', 0)} tokens, "
+          f"{res.get('seconds', 0):.0f} s")
+    print(f"session: {s['id']}; transcript: {project.root / s['transcript']}")
     print(f"final render ({w:g} x {h:g} mm): " + (str(project.root / final.svg) if final.ok else "FAILED"))
-    print(ag.git(project.root, "diff") or "(no changes)")
-    print("revert with: git checkout -- .")
+    print(mgr.diff(s["id"])["diff"] or "(no changes)")
+    print(f"accept with: pintu accept {s['id']}; revert with: pintu revert {s['id']}")
     return 0 if final.ok else 1
+
+
+def _undo(args) -> int:
+    from .project import Project
+    from .sessions import SessionError, SessionManager
+
+    mgr = SessionManager(Project.open(args.project), None, lambda: None)
+    try:
+        if args.cmd == "accept":
+            out = mgr.accept(args.session, args.turn)
+            print(f"accepted turns {out['accepted'] or 'none'}")
+        else:
+            out = mgr.revert(args.session, args.turn, "overwrite" if args.force else "fail")
+            print(f"reverted turns {out['reverted'] or 'none'}: " + (", ".join(out["restored"]) or "no files"))
+    except SessionError as e:
+        print(f"pintu: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _copilot(args) -> int:
@@ -104,11 +118,22 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--dev", action="store_true", help="API only; the Vite dev server serves the frontend")
+    s.add_argument("--profile", help="LLM profile for agent sessions (default: $PINTU_LLM_PROFILE or the first)")
+    s.add_argument("--llm-config", help="llm.toml path (default: $PINTU_LLM_CONFIG or ~/.config/pintu/llm.toml)")
     a = sub.add_parser("agent", help="prompt the LLM agent about a panel")
     _agent_args(a)
     a.add_argument("prompt")
     d = sub.add_parser("adapt", help="let the agent adapt a panel's recipe to a new size")
     _agent_args(d)
+    for name, what in (("accept", "keep"), ("revert", "undo")):
+        u = sub.add_parser(name, help=f"{what} an agent session's changes")
+        u.add_argument("session", help="session id")
+        u.add_argument("--project", default=".", help="project folder (default: .)")
+        u.add_argument("--turn", type=int, help="accept up to / revert from this turn (default: all open turns)")
+        if name == "revert":
+            u.add_argument("--force", action="store_true", help="also restore files changed after the agent's edit")
+    mc = sub.add_parser("mcp", help="serve the MCP tools over stdio, for terminal agents")
+    mc.add_argument("--project", default=".", help="project folder (default: .)")
     lg = sub.add_parser("login", help="log in to a hosted provider (GitHub device flow)")
     lg.add_argument("provider", choices=["copilot"])
     lg.add_argument("--client-id", help="GitHub OAuth app client id (default: $PINTU_COPILOT_CLIENT_ID)")
@@ -122,16 +147,25 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd in ("agent", "adapt"):
         logging.basicConfig(level=logging.WARNING)
         sys.exit(asyncio.run(_run_agent(args, getattr(args, "prompt", None))))
+    if args.cmd in ("accept", "revert"):
+        sys.exit(_undo(args))
+    if args.cmd == "mcp":
+        from .mcp_server import run_stdio
+        from .project import Project
+
+        logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+        run_stdio(Project.open(args.project))
+        return
 
     import uvicorn
 
     from .project import Project
-    from .server import create_app
+    from .server import create_app, default_llm
 
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("watchfiles").setLevel(logging.WARNING)
     project = Project.open(args.project, create=True)
-    app = create_app(project, dev=args.dev)
+    app = create_app(project, dev=args.dev, llm_factory=default_llm(args.profile, args.llm_config))
     where = "API for the Vite dev server" if args.dev else "open"
     print(f"pintu: {project.root} -> {where} http://{args.host}:{args.port}/", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info" if args.dev else "warning")

@@ -136,20 +136,24 @@ tools = true                    # native tool calls; false = JSON in the text
 timeout = 1800                  # seconds per request (default)
 ```
 
-The project must be a git repository with a clean tree (changes under `pintu_out/` and
-`.pintu/` do not count), so `git checkout -- .` reverts an agent run:
+Each run is a session (`pintu/sessions.py`) whose turns start with a checkpoint
+(`pintu/checkpoints.py`), so the tree need not be clean and the project need not be a
+git repository:
 
 ```sh
 cd backend
 uv run pintu adapt --project P --board B --panel ID --size 178x55
 uv run pintu agent --project P --board B --panel ID "label the median line"
+uv run pintu accept SESSION --project P        # keep the changes
+uv run pintu revert SESSION --project P        # undo them; --turn N, --force
 ```
 
 The target panel needs a `source: {recipe: "module:function", params: {...}}`. `--size`
 sets the target size (default: the cell size). `adapt` without `--size` takes the old size
 from the recipe's last render (`meta.json`). Without a server, the CLI starts its own kernel and uses the
 project's render cache (`agent.local_renders`). Both print the model's summary, the
-transcript path, the final render and the `git diff`.
+session id, the transcript path, the final render and the session diff. Sessions, their
+REST and WebSocket API and the MCP server: [api-sessions.md](api-sessions.md).
 
 **Loop.** The first prompt holds the task, the recipe source, the old and new size, a render
 at the new size with its lint report and layout summary (plus the image for vision
@@ -163,6 +167,7 @@ latest two images stay in the history. Tool errors go back to the model as text.
 | `edit_file` | Exact replacement; `old_string` must match once; refuses `.git/` and paths outside the root |
 | `render_panel(id, w?, h?)` | Renders through the board's path, `Renders.render` (cache, then the recipe kernel; default: the target size); returns lint and summary, and a PNG if `vision` |
 | `get_board`, `set_cell(id, cell)` | Read the board; move a panel through `server.apply_ops` and write the board file |
+| `write_file(path, content)`, `render_recipe(recipe, w, h, params?)` | Promote sessions only: create a new file (never overwrites); render a recipe that is not on a board |
 
 With `tools = false`, the system prompt lists the tools and asks for
 `{"name": ..., "arguments": {...}}` in code fences tagged `tool_call_json` (vLLM's GLM

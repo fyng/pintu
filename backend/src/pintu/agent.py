@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import difflib
 import json
 import re
-import subprocess
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 
 import typst
 
 from . import lint as lints, style as styles
 from .board import Board, BoardError
-from .llm import LLM, text_protocol
+from .llm import text_protocol
 from .project import PathError, Project
-from .recipes import OUT_DIR, RenderRequest, RenderResult, output_path
+from .recipes import OUT_DIR, RenderRequest, RenderResult, locate, output_path
 from .renders import Renders, request_for
 from .server import apply_ops
 
@@ -56,6 +56,19 @@ dropping or shrinking non-essential elements when short, switching orientation w
 and narrow. Do it with a rule on w and/or h, so the recipe still works at the old size;
 never hard-code one size. Render at the new size and at the old size to check, and fix
 the lint problems."""
+
+PROMOTE = """\
+Promote a scratch plot to a pintu recipe. The script {script} drew {path}{params}, at {size}.
+Write a new module {module_file} with a recipe `def {fn}(w, h{sig})` that returns a
+matplotlib Figure of exactly w x h mm (`figsize=(w / 25.4, h / 25.4)`) and draws the same
+plot as the script does for that file. Take only the part of the script that draws this
+plot; turn the values that vary per plot into keyword params with the defaults above; put
+slow data loading behind `pintu_sdk.cache(fn, *args)`. Decorate it with
+`@pintu_sdk.panel(min_size=(w, h), max_size=(w, h))`, literal tuples in mm giving the range
+of sizes the recipe is designed for (a range around {size}, not one size). Do not edit the
+script. Create the
+module with write_file, then check it with render_recipe at {size} and at half the width,
+and fix the lint problems. End your final reply with the line `RECIPE: {recipe}`."""
 
 TOOLS = [
     {"type": "function", "function": {
@@ -100,6 +113,30 @@ TOOLS = [
             "cell": {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4}},
             "required": ["id", "cell"]}}},
 ]
+
+PROMOTE_TOOLS = TOOLS + [
+    {"type": "function", "function": {
+        "name": "write_file", "description": "Create a new text file in the project; refuses to overwrite.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"]}}},
+    {"type": "function", "function": {
+        "name": "render_recipe",
+        "description": "Render a recipe `module:function` at w x h mm with params; return its lint report and "
+                       "layout summary (and the image, for vision models).",
+        "parameters": {"type": "object", "properties": {
+            "recipe": {"type": "string"}, "w": {"type": "number"}, "h": {"type": "number"},
+            "params": {"type": "object"}},
+            "required": ["recipe", "w", "h"]}}},
+]
+
+
+class Guard(Protocol):
+    """Called around each file write, for checkpoints."""
+
+    def before(self, rel: str) -> None: ...
+
+    def after(self, rel: str) -> None: ...
 
 
 class ToolError(Exception):
@@ -232,19 +269,19 @@ def local_renders(project: Project) -> Renders:
     return renders
 
 
-def git(root: Path, *args: str) -> str:
-    """Runs git in the project; returns stdout."""
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True).stdout
-
-
-def git_dirty(root: Path) -> list[str]:
-    """Changed or untracked paths, ignoring pintu's own output folders.
-
-    Raises:
-        subprocess.CalledProcessError: The project is not a git repository.
-    """
-    lines = git(root, "status", "--porcelain").splitlines()
-    return [ln for ln in lines if not ln[3:].startswith((OUT_DIR + "/", ".pintu/"))]
+def board_summary(b: Board) -> dict:
+    """The board for the agent and MCP: page, grid and panels with cells, sizes and sources."""
+    pg = b.page
+    bands = b.bands()
+    panels = []
+    for p in b.panels:
+        _, _, w, h = b.content_rect(p, bands[p["id"]])
+        src = dict(p.get("source") or {})
+        panels.append({"id": p["id"], "cell": list(p["cell"]), "size_mm": [round(w, 2), round(h, 2)],
+                       "source": {k: src[k] for k in ("file", "recipe", "params") if k in src}})
+    return {"page": {"width": pg.width, "height": pg.height, "grid": [pg.nx, pg.ny],
+                     "gutter": pg.gutter, "style": b.style},
+            "panels": panels}
 
 
 @dataclass
@@ -253,7 +290,7 @@ class Result:
 
     Attributes:
         text: The model's final message.
-        stopped: ``done`` or ``step_cap``.
+        stopped: ``done``, ``step_cap`` or ``aborted``.
         steps: Model calls made.
         usage: Summed token counts.
         seconds: Wall time.
@@ -271,37 +308,47 @@ class Result:
 
 
 class Agent:
-    """One agent session on a board panel.
+    """An agent conversation, about a board panel or the project.
 
     Args:
         project: The project.
-        board: Board name.
-        panel: Panel id the prompt is about.
+        board: Board name, or None (then ``render_panel``, ``get_board`` and ``set_cell`` fail).
+        panel: Panel id the prompt is about, or None; a panel must have a recipe.
         renders: Render path shared with the board (``State.renders`` in the server).
-        llm: Model client.
+        llm: Model client (anything with ``profile`` and ``chat``).
         size: Target (w, h) in mm; defaults to the panel's cell size.
         old_size: Size the recipe was designed for; defaults to the cell size.
-        max_steps: Cap on model calls.
-        on_event: Called with each transcript record, for progress output.
+        max_steps: Cap on model calls per ``run``.
+        on_event: Called with each transcript record, and ``tool_start`` records, for progress.
+        tools: Tool schemas offered to the model.
+        guard: Called around each file write.
+        extra: More context sections for the first message, as markdown.
     """
 
-    def __init__(self, project: Project, board: str, panel: str, renders: Renders, llm: LLM,
+    def __init__(self, project: Project, board: Optional[str], panel: Optional[str], renders: Renders, llm: Any,
                  size: Optional[tuple[float, float]] = None, old_size: Optional[tuple[float, float]] = None,
-                 max_steps: int = MAX_STEPS, on_event: Optional[Callable[[dict], None]] = None):
+                 max_steps: int = MAX_STEPS, on_event: Optional[Callable[[dict], None]] = None,
+                 tools: Optional[list[dict]] = None, guard: Optional[Guard] = None,
+                 extra: Optional[list[str]] = None):
         self.project, self.board_name, self.panel_id = project, board, panel
         self.pack = styles.for_project(project)
         self.renders, self.llm, self.max_steps, self.on_event = renders, llm, max_steps, on_event
-        self.cell_size = self.panel_size(panel)
+        self.tools, self.guard, self.extra = tools or TOOLS, guard, extra or []
+        self.cell_size = self.panel_size(panel) if panel else None
         self.size = tuple(size) if size else self.cell_size
         self.old_size = tuple(old_size) if old_size else self.cell_size
-        self.recipe(panel)  # fails early for a panel without a recipe
+        if panel:
+            self.recipe(panel)  # fails early for a panel without a recipe
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        self.transcript = project.root / LOG_DIR / f"{stamp}-{panel}.jsonl"
+        self.transcript = project.root / LOG_DIR / f"{stamp}-{panel or 'project'}.jsonl"
         self.last_render: Optional[RenderResult] = None
+        self.messages: list[dict] = []
 
     # -- board and recipe ---------------------------------------------------
 
     def board(self) -> Board:
+        if not self.board_name:
+            raise ToolError("no board is open in this session")
         return Board.load(self.project.board_path(self.board_name), self.pack)
 
     def panel_size(self, pid: str) -> tuple[float, float]:
@@ -380,6 +427,31 @@ class Agent:
                         return "\n".join(hits + [f"[stopped at {MAX_GREP} matches]"])
         return "\n".join(hits) or "no matches"
 
+    def _write(self, p: Path, text: str) -> None:
+        """Writes a project file, with the guard's before and after calls."""
+        rel = self.project.relative(p)
+        if self.guard:
+            self.guard.before(rel)
+        p.write_text(text, encoding="utf-8")
+        if self.guard:
+            self.guard.after(rel)
+
+    def t_write_file(self, path: str, content: str) -> str:
+        p = self._path(path, write=True)
+        if p.exists():
+            raise ToolError(f"{path} exists; use edit_file to change it")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._write(p, content)
+        return f"ok: wrote {path}"
+
+    async def t_render_recipe(self, recipe: str, w: float, h: float,
+                              params: Optional[dict] = None) -> tuple[str, Optional[bytes]]:
+        if locate(self.project, recipe) is None:
+            raise ToolError(f"recipe {recipe!r} not found (module:function, importable from the project root)")
+        res = await self.renders.render(RenderRequest(recipe, dict(params or {}), float(w), float(h)))
+        png = rasterize(self.project.root, res.svg, pack=self.pack) if res.ok and self.llm.profile.vision else None
+        return report(res, float(w), float(h), self.pack), png
+
     def t_edit_file(self, path: str, old_string: str, new_string: str) -> str:
         p = self._path(path, write=True)
         if not p.is_file():
@@ -397,7 +469,7 @@ class Agent:
                             "it must match exactly once: include more surrounding lines")
         if n == 0:
             raise ToolError(f"old_string matches 0 times in {path}. " + edit_miss(text, old_string))
-        p.write_text(text.replace(old_string, new_string, 1), encoding="utf-8")
+        self._write(p, text.replace(old_string, new_string, 1))
         return f"ok: edited {path}"
 
     async def t_render_panel(self, id: str, w: Optional[float] = None, h: Optional[float] = None) -> tuple[str, Optional[bytes]]:
@@ -409,18 +481,7 @@ class Agent:
         return report(res, w, h, self.pack), png
 
     def t_get_board(self) -> str:
-        b = self.board()
-        pg = b.page
-        bands = b.bands()
-        panels = []
-        for p in b.panels:
-            _, _, w, h = b.content_rect(p, bands[p["id"]])
-            src = dict(p.get("source") or {})
-            panels.append({"id": p["id"], "cell": list(p["cell"]), "size_mm": [round(w, 2), round(h, 2)],
-                           "source": {k: src[k] for k in ("file", "recipe", "params") if k in src}})
-        return json.dumps({"page": {"width": pg.width, "height": pg.height, "grid": [pg.nx, pg.ny],
-                                    "gutter": pg.gutter, "style": b.style},
-                           "panels": panels}, default=str)
+        return json.dumps(board_summary(self.board()), default=str)
 
     def t_set_cell(self, id: str, cell: list) -> str:
         b = self.board()
@@ -428,7 +489,7 @@ class Agent:
             warnings = apply_ops(self.project, b, [{"op": "set_cell", "id": id, "cell": cell}])
         except (BoardError, PathError, KeyError, TypeError, ValueError) as e:
             raise ToolError(f"set_cell refused: {e}")
-        self.project.board_path(self.board_name).write_text(b.dumps(), encoding="utf-8")
+        self._write(self.project.board_path(self.board_name), b.dumps())
         if id == self.panel_id:
             self.size = self.panel_size(id)
         w, h = self.panel_size(id)
@@ -459,13 +520,27 @@ class Agent:
         if self.on_event:
             self.on_event(rec)
 
+    def _system(self) -> str:
+        system = SYSTEM + "\n" + styles.rules_text(self.pack, self.board().style if self.board_name else None)
+        if not self.llm.profile.tools:
+            system += "\n" + text_protocol(self.tools)
+        return system
+
     async def context(self, prompt: str) -> list[dict]:
-        """System and first user message: task, recipe source, sizes, lint, render, style rules."""
+        """System and first user message: task, recipe source, sizes, lint, render, style rules.
+
+        Without a panel: the task, the board (if any) and the extra sections.
+        """
+        if not self.panel_id:
+            parts = [f"## Task\n\n{prompt}"]
+            if self.board_name:
+                parts.append(f"## Board {self.board_name!r}\n\n{self.t_get_board()}")
+            text = "\n\n".join(parts + self.extra)
+            return [{"role": "system", "content": self._system()},
+                    {"role": "user", "content": [{"type": "text", "text": text}]}]
         recipe, params, rel = self.recipe(self.panel_id)
         res, w, h = await self.render(self.panel_id)
-        system = SYSTEM + "\n" + styles.rules_text(self.pack, self.board().style)
-        if not self.llm.profile.tools:
-            system += "\n" + text_protocol(TOOLS)
+        system = self._system()
         text = "\n\n".join([
             f"## Task\n\n{prompt}",
             f"## Panel\n\nBoard {self.board_name!r}, panel {self.panel_id!r}, recipe `{recipe}`"
@@ -474,6 +549,7 @@ class Agent:
             + f" Size on the board (below the letter band): {fmt_size(*self.cell_size)}.",
             f"## Recipe source ({rel})\n\n```python\n{self.t_read_file(rel)}\n```",
             f"## Current render at the new size\n\n{report(res, w, h, self.pack)}",
+            *self.extra,
         ])
         fonts = styles.font_problems(self.pack, (res.summary or {}).get("fonts_found") if res.ok else None)
         if fonts:
@@ -490,25 +566,49 @@ class Agent:
         self._log({"type": "start", "profile": prof.name, "model": prof.model, "tools": prof.tools,
                    "vision": prof.vision, "board": self.board_name, "panel": self.panel_id,
                    "size": self.size, "old_size": self.old_size, "prompt": prompt})
-        messages = await self.context(prompt)
-        for m in messages:
+        new = [{"role": "user", "content": prompt}] if self.messages else await self.context(prompt)
+        messages = self.messages
+        for m in new:
+            messages.append(m)
             self._log({"type": "message", "message": _redact(m)})
         usage = {"prompt": 0, "completion": 0, "total": 0}
+        try:
+            return await self._loop(messages, usage, t0)
+        except asyncio.CancelledError:
+            self._close_calls(messages)
+            self._log({"type": "end", "stopped": "aborted", "usage": usage,
+                       "seconds": round(time.perf_counter() - t0, 2)})
+            raise
+
+    def _close_calls(self, messages: list[dict]) -> None:
+        """Answers the last reply's unanswered tool calls, so the history stays valid after an abort."""
+        last = next((i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "assistant"), None)
+        calls = messages[last].get("tool_calls") or [] if last is not None else []
+        if calls:
+            done = {m.get("tool_call_id"): m for m in messages[last + 1:] if m["role"] == "tool"}
+            del messages[last + 1:]
+            for c in calls:
+                messages.append(done.get(c["id"]) or {"role": "tool", "tool_call_id": c["id"],
+                                                      "content": "error: aborted by the user"})
+        messages.append({"role": "user", "content": "[The user aborted this turn.]"})
+
+    async def _loop(self, messages: list[dict], usage: dict, t0: float) -> Result:
+        prof = self.llm.profile
         called: list[str] = []
         steps, stopped, text, nudged = 0, "step_cap", "", False
         while steps < self.max_steps:
             steps += 1
-            reply = await self.llm.chat(prune_images(messages), TOOLS)
+            reply = await self.llm.chat(prune_images(messages), self.tools)
             for k, v in reply.usage.items():
                 usage[k] = usage.get(k, 0) + (v or 0)
             messages.append(reply.message)
             text = reply.content
             self._log({"type": "reply", "step": steps, "seconds": round(reply.seconds, 2), "usage": reply.usage,
                        "reasoning": reply.reasoning, "content": reply.content,
-                       "tool_calls": [{"name": c.name, "arguments": c.arguments, "error": c.error}
+                       "tool_calls": [{"id": c.id, "name": c.name, "arguments": c.arguments, "error": c.error}
                                       for c in reply.tool_calls]})
             if not reply.tool_calls:
-                if prof.tools or nudged or {"edit_file", "set_cell"} & set(called):
+                if prof.tools or nudged or {"edit_file", "write_file", "set_cell"} & set(called):
                     stopped = "done"
                     break
                 nudged = True  # text mode: a reply that announces a call but writes none
@@ -519,9 +619,11 @@ class Agent:
             results, images = [], []
             for c in reply.tool_calls:
                 t1 = time.perf_counter()
+                if self.on_event:
+                    self.on_event({"type": "tool_start", "step": steps, "id": c.id, "name": c.name})
                 out, png = (f"error: {c.error}", None) if c.error else await self.call(c.name, c.arguments)
                 called.append(c.name)
-                self._log({"type": "tool", "step": steps, "name": c.name, "arguments": c.arguments,
+                self._log({"type": "tool", "step": steps, "id": c.id, "name": c.name, "arguments": c.arguments,
                            "seconds": round(time.perf_counter() - t1, 2), "result": out, "image": png is not None})
                 results.append((c, out))
                 if png:
