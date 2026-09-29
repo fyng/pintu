@@ -44,7 +44,7 @@ class Renderer:
                  pack: Optional[styles.StylePack] = None):
         self.project = project
         self.recipe_svg = recipe_svg
-        fonts = styles.typst_fonts((pack or styles.default()).font_paths)
+        fonts = styles.typst_fonts((pack or styles.default()).all_font_paths())
         self._compiler = typst.Compiler(root=str(project.root), font_paths=fonts)
         self._lock = threading.Lock()
         self._thumbs: dict[tuple[str, float], bytes] = {}

@@ -325,7 +325,8 @@ class Agent:
         dw, dh = self.size if pid == self.panel_id else self.panel_size(pid)
         w, h = float(w or dw), float(h or dh)
         full = request_for(self.board(), self.board().panel(pid))
-        res = await self.renders.render(RenderRequest(recipe, params, w, h, full.multiples if full else None))
+        res = await self.renders.render(RenderRequest(recipe, params, w, h, full.multiples if full else None,
+                                                      *((full.preset, full.rc) if full else ())))
         if pid == self.panel_id:
             self.last_render = res
         return res, w, h

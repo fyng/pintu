@@ -115,7 +115,7 @@ class State:
         st = b.preset
         letters = b.letters()
         bands = b.bands()
-        panels, warnings = [], styles.font_problems(self.pack, self.renders.fonts_found)
+        panels, warnings = [], styles.font_problems(self.pack.view(b.style), self.renders.fonts_found)
         if page.height > st["max_height"]:
             warnings.append(f"page height {page.height:g} mm exceeds the {st['name']} cap of {st['max_height']:g} mm")
         for p in b.panels:
@@ -169,8 +169,8 @@ class State:
         if isinstance(m, dict):
             kw = mult.call_kwargs(m)
             nrows, ncols, _ = mult.parse(kw["mosaic"])
-            margins = styles.margins(b.preset)
             _, _, w, h = b.content_rect(p)
+            margins = styles.margins(b.preset, round(w, 2), round(h, 2))
             min_cell = meta["min_cell"] if meta else None
             out["multiples"] = {
                 "item": str(m["item"]), **kw, "minCell": min_cell,

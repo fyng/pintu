@@ -25,9 +25,12 @@
   body
 }
 
-// Draws a panel letter at the top-left of its letter band.
-#let board-letter(letter, band: 3.5mm, size: 8pt, weight: 700) = box(height: band,
-  align(left + top, text(size: size, weight: weight, letter)))
+// Draws a panel letter at the top-left of its letter band. `fill` and `font`
+// none keep the board text's.
+#let board-letter(letter, band: 3.5mm, size: 8pt, weight: 700, fill: none, font: none) = box(height: band,
+  align(left + top, text(size: size, weight: weight,
+    ..(if fill != none { (fill: fill) } else { (:) }),
+    ..(if font != none { (font: font) } else { (:) }), letter)))
 
 // A placeholder for a panel with no drawable source.
 #let board-empty(w, h, label, band: 0mm) = block(width: w, height: h, fill: luma(245),
@@ -40,7 +43,7 @@
 // full-width band of height `band` at its top for the letter; the source fills
 // the area below it (band 0: the whole cell).
 #let board-panel(page-w, page-h, grid, cell, gutter: 3mm, src: none, kind: "vector",
-  label: "", letter: none, band: 0mm, letter-size: 8pt, letter-weight: 700) = {
+  label: "", letter: none, band: 0mm, letter-size: 8pt, letter-weight: 700, letter-fill: none, letter-font: none) = {
   let x = grid-span(page-w, grid.at(0), cell.at(0), cell.at(2), gutter: gutter)
   let y = grid-span(page-h, grid.at(1), cell.at(1), cell.at(3), gutter: gutter)
   place(top + left, dx: x.at, dy: y.at, block(width: x.len, height: y.len, clip: true, {
@@ -50,7 +53,8 @@
       place(top + left, dy: band, image(src, width: x.len, height: y.len - band, fit: "contain"))
     }
     if letter != none {
-      place(top + left, board-letter(letter, band: band, size: letter-size, weight: letter-weight))
+      place(top + left, board-letter(letter, band: band, size: letter-size, weight: letter-weight,
+        fill: letter-fill, font: letter-font))
     }
   }))
 }

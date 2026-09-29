@@ -458,20 +458,24 @@ validated in `pintu/style.py` (errors name the file, table and key):
 
 | Table | Holds |
 |---|---|
-| `[pack]` | `name`, `default_preset`, optional `notes` (extra rules for the LLM) |
+| `[pack]` | `name`, `default_preset`; optional `schema` (default 1; a newer schema is refused), `source = {url, ref}` (the guide and commit or tag the pack follows), `notes` (extra rules for the LLM; `pintu stylepack check` warns above 4 KB, a pack above 16 KB is invalid) |
 | `[fonts]` | `family` (preference order), `paths` (font folders beside the file), `size_pt` |
-| `[letter]` | `size_pt`, `weight`, `case` (`lower`, `upper`, `keep`), `band_mm` |
-| `[margins]` | margins in mm for helpers such as multiples (`style.margins(preset)`): `left`, `right`, `top`, `bottom`, `gap`, `tick`, `title`, `key`; defaults match `pintu_sdk.multiples.MARGINS` |
-| `[presets.<name>]` | `widths`, `max_height`; optional `letter` and `margins` overrides |
+| `[letter]` | `size_pt`, `weight`, `case` (`lower`, `upper`, `keep`), `band_mm`; optional `color` (hex) and `font` |
+| `[margins]` | margins in mm for helpers such as multiples (`style.margins(preset, w, h)`): `left`, `right`, `top`, `bottom`, `gap`, `tick`, `title`, `key`; defaults match `pintu_sdk.multiples.MARGINS`. Optional `[margins.scale]`: `ref_mm = [w, h]`, `exponent` (0.5), `discount` (1), `fixed` (mm per margin that does not scale); at a w × h panel each margin m becomes f + (m − f)·k, k = 1 + discount·((w·h / ref area)^exponent − 1). Without it margins are fixed |
+| `[presets.<name>]` | `widths`, `max_height`; optional `letter`, `margins`, `fonts`, `lint` and `matplotlib` overrides, merged per key (lint rules by `id`) |
 | `[lint]` | `text_pt = [min, max]`, `size_tol_mm`, `[[lint.rules]]` (§8) |
+| `[matplotlib]` | `rc`: flat rcParams (quoted dotted keys; scalars or arrays) the recipe kernel applies around each render and then restores; recipes need no import. Keys are not checked in the backend; an unknown key fails the render |
 | `[typst]` | `snippet`, inserted after the board's page setup |
 
 pintu ships a neutral `default` pack in the package; it holds the Nature preset
 the prototype hard-coded. `[style] pack` in `pintu.toml` picks a pack by built-in
 name or by a path relative to the project; `page.style` picks a preset in it (an
-unknown name gives the default preset). Typst compiles with the pack's font
-folders, and the recipe kernel registers them with matplotlib. The agent gets
-the pack's rules as text (§9). `examples/stylepacks/strict/` mirrors a design
+unknown name gives the default preset). Typst compiles with the font folders of
+the pack and its presets, and the recipe kernel registers the preset's folders
+with matplotlib. Lint, the agent's rules text (§9) and the render's rc use the
+board preset's merged values. `pintu stylepack check <dir>` validates a pack
+and prints its presets, warnings and rules text. A contract fixture
+(`backend/tests/fixtures/stylepacks/contract/`) uses every key. `examples/stylepacks/strict/` mirrors a design
 system's rules (5–6 pt tick labels, 1–3 pt ticks, 0.25–1 pt axes).
 **kare.** `kare` (github.com/fyng/kare, MIT) is a pure design guide: it has
 no knowledge of pintu and holds no plotting code. pintu implements kare's style
@@ -667,6 +671,15 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
   recipe passes. Preview latency on the demo boards unchanged (median 30–39 ms
   against 40–44 ms before, same host). The `kare` pack, built in pintu from
   kare's reference, is pending (§10).
+- [ ] kare integration (§10). Phase A, pack schema without a kare checkout
+  (branch `kare-phase-a`), done: `[pack] schema` and `source`; `pintu stylepack
+  check` and the notes cap; tests find kare via `PINTU_KARE_DIR`, `../kare`,
+  then `../academic-design-system`; per-preset `fonts`, `lint` and
+  `matplotlib` overrides; `letter.color` and `font`; `[matplotlib] rc` in the
+  kernel; `[margins.scale]`. The default pack's board Typst, compiled SVG and
+  PDF, render cache keys and output paths are unchanged; preview latency
+  unchanged (median 28–32 ms both before and after). Phase B, the `kare` pack
+  and its drift test, is next.
 
 **Known bugs and gaps**
 

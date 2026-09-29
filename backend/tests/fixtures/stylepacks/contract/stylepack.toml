@@ -1,0 +1,73 @@
+# Contract fixture: uses every stylepack.toml key (pintu.style). Values are made up.
+# fonts/ and fonts-serif/ hold no font files in the repo; tests link matplotlib's
+# bundled DejaVu fonts into a copy (see test_style.contract_pack).
+
+[pack]
+schema = 1
+name = "contract"
+default_preset = "wide"
+source = { url = "https://example.org/guide", ref = "v0.0-test" }
+notes = ["Contract note one.", "Contract note two."]
+
+[fonts]
+family = ["DejaVu Sans", "Liberation Sans"]
+paths = ["fonts"]
+size_pt = 6.5
+
+[letter]
+size_pt = 9
+weight = "bold"
+case = "upper"
+band_mm = 4
+color = "#1a2b3c"
+font = ["DejaVu Sans"]
+
+[margins]
+left = 8.8
+right = 2
+top = 3.6
+bottom = 5.8
+gap = 2
+tick = 5.2
+title = 3
+key = 3.5
+
+[margins.scale]
+ref_mm = [30, 24]
+exponent = 0.5
+discount = 0.5
+fixed = { left = 6.6, top = 2.0, bottom = 4.0, right = 2 }
+
+[matplotlib]
+rc = { "axes.linewidth" = 0.5, "xtick.major.size" = 1.42, "axes.spines.top" = false, "font.family" = ["DejaVu Sans"] }
+
+[lint]
+text_pt = [5, 7]
+size_tol_mm = 0.2
+
+[[lint.rules]]
+id = "tick-labels"
+property = "tick_label_pt"
+min = 5
+max = 5
+message = "tick labels are 5 pt"
+
+[[lint.rules]]
+property = "spine_width_pt"
+max = 0.6
+
+[typst]
+snippet = "#set text(tracking: 0pt)"
+
+[presets.wide]
+widths = { col1 = 89, full = 183 }
+max_height = 170
+
+[presets.cell]
+widths = { col1 = 85, full = 174 }
+max_height = 200
+letter = { case = "lower", size_pt = 8, color = "#000000", font = "DejaVu Serif" }
+margins = { left = 10, scale = { discount = 0.25 } }
+fonts = { family = ["DejaVu Serif"], paths = ["fonts-serif"], size_pt = 6 }
+lint = { text_pt = [6, 8], rules = [{ id = "tick-labels", property = "tick_label_pt", min = 6, max = 6, message = "tick labels are 6 pt" }] }
+matplotlib = { rc = { "axes.linewidth" = 0.75, "font.family" = ["DejaVu Serif"] } }

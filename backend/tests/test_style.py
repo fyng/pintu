@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -143,3 +144,169 @@ def test_rules_text():
     assert "57 mm (col1)" in t and "height at most 230 mm" in t and "All text 5-7 pt" in t
     assert "Size of drawn tick labels: 5-6 pt (tick labels are 5 pt" in t
     assert "Length of visible tick marks: 1-3 pt" in t and "Type roles:" in t
+
+
+CONTRACT = Path(__file__).resolve().parent / "fixtures" / "stylepacks" / "contract"
+
+
+def contract_pack(tmp_path):
+    """A copy of the contract pack with matplotlib's DejaVu Sans and Serif linked into its font folders."""
+    import matplotlib
+    ttf = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
+    d = tmp_path / "contract"
+    shutil.copytree(CONTRACT, d)
+    (d / "fonts" / "DejaVuSans.ttf").symlink_to(ttf / "DejaVuSans.ttf")
+    (d / "fonts-serif" / "DejaVuSerif.ttf").symlink_to(ttf / "DejaVuSerif.ttf")
+    return d
+
+
+def test_contract_pack_uses_every_key():
+    doc = style.tomllib.loads((CONTRACT / "stylepack.toml").read_text())
+    assert set(doc) == style._TOP
+    for table, keys in style.KEYS.items():
+        if table == "presets.*":
+            used = set().union(*doc["presets"].values())
+        elif table == "lint.rules":
+            used = set().union(*doc["lint"]["rules"])
+        else:
+            t = doc
+            for part in table.split("."):
+                t = t[part]
+            used = set(t)
+        assert used == keys, table
+
+
+def test_contract_pack_loads(tmp_path):
+    p = style.load(contract_pack(tmp_path))
+    assert p.schema == 1 and p.source == {"url": "https://example.org/guide", "ref": "v0.0-test"}
+    assert p.rc["axes.spines.top"] is False and p.letter["color"] == "#1a2b3c"
+    wide, cell = p.view("wide"), p.view("cell")
+    assert wide.fonts == ("DejaVu Sans", "Liberation Sans") and cell.fonts == ("DejaVu Serif",)
+    assert cell.font_size_pt == 6 and cell.preset("cell")["font_size_pt"] == 6 and wide.font_size_pt == 6.5
+    assert [q.name for q in cell.font_paths] == ["fonts-serif"] and [q.name for q in wide.font_paths] == ["fonts"]
+    assert [q.name for q in p.all_font_paths()] == ["fonts", "fonts-serif"]
+    assert "dejavu serif" in style.typst_families(cell.font_paths)
+    # Lint merges per key; rules merge by id.
+    assert cell.text_pt == (6, 8) and cell.size_tol_mm == 0.2 and wide.text_pt == (5, 7)
+    assert [(r.id, r.min) for r in cell.rules] == [("tick-labels", 6), ("spine_width_pt", None)]
+    assert [(r.id, r.min) for r in wide.rules] == [("tick-labels", 5), ("spine_width_pt", None)]
+    assert cell.rc == {**p.rc, "axes.linewidth": 0.75, "font.family": ["DejaVu Serif"]}
+    assert p.preset("cell")["rc"] == cell.rc and p.preset("wide")["rc"] == p.rc
+    assert p.view("nope") is wide and cell.view("wide") is wide
+    lt = p.preset("cell")["letter"]
+    assert lt["font"] == ("DejaVu Serif",) and lt["color"] == "#000000" and lt["lower"] and lt["weight"] == 700
+    assert style.warnings(p) == []
+
+
+def test_schema_version(tmp_path):
+    assert style.load(write(tmp_path, MINIMAL)).schema == 1
+    newer = MINIMAL.replace('[pack]\n', '[pack]\nschema = 2\n') + "[future]\nx = 1\n"
+    with pytest.raises(style.StylePackError, match="schema 2 is newer than this pintu supports \\(1\\)"):
+        style.load(write(tmp_path, newer, "b"))
+    with pytest.raises(style.StylePackError, match="schema must be an integer"):
+        style.load(write(tmp_path, MINIMAL.replace('[pack]\n', '[pack]\nschema = "1"\n'), "c"))
+    with pytest.raises(style.StylePackError, match="source must be a table"):
+        style.load(write(tmp_path, MINIMAL.replace('[pack]\n', '[pack]\nsource = {commit = "x"}\n'), "d"))
+
+
+@pytest.mark.parametrize("extra, match", [
+    ("[letter]\ncolor = 'red'\n", "color must be a hex colour"),
+    ("[letter]\nfont = []\n", "font must be a font name"),
+    ("[matplotlib]\nrc = {axes = {linewidth = 1}}\n", "rc 'axes' must be a string"),
+    ("[matplotlib]\nrc = 3\n", "rc must be a table"),
+    ("[matplotlib]\nstyle = 'x'\n", "unknown key"),
+    ("[margins.scale]\ndiscount = 0.5\n", "ref_mm is required"),
+    ("[margins.scale]\nref_mm = [30]\n", "ref_mm must be"),
+    ("[margins.scale]\nref_mm = [30, 24]\ndiscount = 2\n", "discount must be 0-1"),
+    ("[margins.scale]\nref_mm = [30, 24]\nfixed = {left = 20}\n", "fixed.left 20 is above the margin 12"),
+    ("[margins.scale]\nref_mm = [30, 24]\nfixed = {inner = 1}\n", "unknown margin"),
+    ("[margins.scale]\nref_mm = [30, 24]\nlog = true\n", "unknown key"),
+])
+def test_new_key_validation_errors(tmp_path, extra, match):
+    with pytest.raises(style.StylePackError, match=match):
+        style.load(write(tmp_path, MINIMAL + extra))
+
+
+def test_preset_override_validation(tmp_path):
+    for i, (line, match) in enumerate([
+            ("fonts = {family = 'Arial'}", "family must be a non-empty list"),
+            ("fonts = {colour = 1}", "unknown key"),
+            ("lint = {text_pt = [8, 6]}", "min 8 is above max 6"),
+            ("matplotlib = {rc = {x = {y = 1}}}", "must be a string"),
+            ("margins = {scale = {ref_mm = [30, 24], fixed = {left = 13}}}", "above the margin")]):
+        with pytest.raises(style.StylePackError, match=match):
+            style.load(write(tmp_path, MINIMAL + line + "\n", f"p{i}"))
+
+
+def test_notes_cap(tmp_path, capsys):
+    def at(n):
+        return MINIMAL.replace('[pack]\n', '[pack]\nnotes = [' + ", ".join(['"' + "x" * 99 + '"'] * n) + ']\n')
+    ok = style.load(write(tmp_path, at(40), "a"))
+    assert style.notes_bytes(ok.notes) == 4000 and style.warnings(ok) == []
+    warn = style.load(write(tmp_path, at(41), "b"))
+    assert style.warnings(warn) == ["notes: 4100 bytes, above the 4096-byte budget; every agent prompt carries them"]
+    with pytest.raises(style.StylePackError, match="notes are 16400 bytes; the limit is 16384"):
+        style.load(write(tmp_path, at(164), "c"))
+    assert style.check(tmp_path / "b") == 0
+    assert "warning: notes: 4100 bytes" in capsys.readouterr().out
+
+
+def test_stylepack_check_cli(tmp_path, capsys):
+    from pintu import cli
+    with pytest.raises(SystemExit) as e:
+        cli.main(["stylepack", "check", str(contract_pack(tmp_path))])
+    out = capsys.readouterr().out
+    assert e.value.code == 0
+    assert "pack 'contract' (schema 1, source https://example.org/guide @ v0.0-test): ok" in out
+    assert "preset wide (default): col1 89, full 183 mm; max height 170 mm; font DejaVu Sans" in out
+    assert "preset cell: col1 85, full 174 mm; max height 200 mm; font DejaVu Serif" in out
+    assert "Style rules (pack 'contract', preset 'cell')" in out and "tick labels are 6 pt" in out
+    assert "warning" not in out
+    bad = write(tmp_path, MINIMAL + "[letter]\ncase = 'title'\n", "bad")
+    with pytest.raises(SystemExit) as e:
+        cli.main(["stylepack", "check", str(bad)])
+    out = capsys.readouterr().out
+    assert e.value.code == 1 and out.startswith("error: ") and "case must be one of" in out
+
+
+def test_rules_text_uses_preset_overrides(tmp_path):
+    p = style.load(contract_pack(tmp_path))
+    cell, wide = style.rules_text(p, "cell"), style.rules_text(p, "wide")
+    assert "All text 6-8 pt; font DejaVu Serif" in cell and "Size of drawn tick labels: 6-6 pt" in cell
+    assert "All text 5-7 pt; font DejaVu Sans, Liberation Sans" in wide and "5-5 pt" in wide
+    assert "matplotlib rcParams" in cell
+    assert "rcParams" not in style.rules_text(style.default(), None)
+
+
+def test_margin_scale_rule(tmp_path):
+    p = style.load(contract_pack(tmp_path))
+    wide = p.preset("wide")
+    base = style.margins(wide)
+    assert base["left"] == 8.8 and style.margins(wide, 30, 24) == base  # the reference cell
+    # 60 x 48 mm: s = 2, k = 1 + 0.5 * (2 - 1) = 1.5; fixed parts do not scale.
+    m = style.margins(wide, 60, 48)
+    assert m["left"] == pytest.approx(6.6 + 2.2 * 1.5) and m["top"] == pytest.approx(2 + 1.6 * 1.5)
+    assert m["right"] == 2 and m["gap"] == pytest.approx(3) and m["tick"] == pytest.approx(7.8)
+    # The preset overrides the discount only: k = 1 + 0.25 * (2 - 1) = 1.25.
+    c = style.margins(p.preset("cell"), 60, 48)
+    assert c["left"] == pytest.approx(6.6 + 3.4 * 1.25) and c["gap"] == pytest.approx(2.5)
+    # Without a rule, margins are fixed at any size.
+    d = style.get("nature")
+    assert d["margin_scale"] is None and style.margins(d, 183, 120) == style.margins(d)
+
+
+def test_letter_color_and_font_codegen(tmp_path):
+    import typst
+    from pintu.render import library_source
+    p = style.load(contract_pack(tmp_path))
+    text = "version: 1\npage: {width: 100, height: 80, style: %s}\npanels:\n  - {id: p, cell: [0, 0, 36, 36]}\n"
+    src = codegen.generate(Board.loads(text % "wide", p), lambda f: False, "x")
+    assert 'letter: "A"' in src and 'letter-fill: rgb("#1a2b3c")' in src and 'letter-font: ("DejaVu Sans",)' in src
+    src = codegen.generate(Board.loads(text % "cell", p), lambda f: False, "x")
+    assert 'letter-fill: rgb("#000000")' in src and 'letter-font: ("DejaVu Serif",)' in src
+    # The library takes the new arguments.
+    (tmp_path / "boards" / "build").mkdir(parents=True)
+    (tmp_path / "boards" / "build" / codegen.LIBRARY).write_text(library_source())
+    svg = typst.compile(src.encode(), format="svg", root=str(tmp_path),
+                        font_paths=style.typst_fonts(p.all_font_paths()))
+    assert b"<svg" in svg

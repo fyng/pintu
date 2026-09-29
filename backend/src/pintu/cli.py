@@ -1,4 +1,4 @@
-"""Command line: ``pintu serve``, ``agent``, ``adapt``, ``login copilot`` and ``models copilot``."""
+"""Command line: ``pintu serve``, ``agent``, ``adapt``, ``login copilot``, ``models copilot`` and ``stylepack check``."""
 
 from __future__ import annotations
 
@@ -116,7 +116,13 @@ def main(argv: list[str] | None = None) -> None:
     m.add_argument("provider", choices=["copilot"])
     m.add_argument("--profile", help="copilot profile in llm.toml, for its base_url and token_exchange")
     m.add_argument("--llm-config", help="llm.toml path")
+    sp = sub.add_parser("stylepack", help="validate a style pack and print its rules")
+    sp.add_argument("action", choices=["check"])
+    sp.add_argument("path", help="pack folder or its stylepack.toml")
     args = ap.parse_args(argv)
+    if args.cmd == "stylepack":
+        from . import style
+        sys.exit(style.check(args.path))
     if args.cmd in ("login", "models"):
         sys.exit(_copilot(args))
     if args.cmd in ("agent", "adapt"):

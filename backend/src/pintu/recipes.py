@@ -36,6 +36,9 @@ class RenderRequest:
         height_mm: Height of the cell below its letter band.
         multiples: For a multiples panel, the ``mosaic``, ``share`` and ratios
             passed to the recipe, and the style's ``margins`` for the SDK.
+        preset: The board's style preset, for its fonts and lint; None: the pack's default.
+        rc: matplotlib rcParams the kernel applies for this render (the preset's merged
+            ``[matplotlib] rc``); None if the pack sets none.
     """
 
     recipe: str
@@ -43,6 +46,8 @@ class RenderRequest:
     width_mm: float = 0.0
     height_mm: float = 0.0
     multiples: Optional[dict] = None
+    preset: Optional[str] = None
+    rc: Optional[dict] = None
 
 
 @dataclass
@@ -92,16 +97,18 @@ def _fmt(v: float) -> str:
     return f"{v:.2f}".rstrip("0").rstrip(".")
 
 
-def output_path(recipe: str, params: dict, w: float, h: float, multiples: Optional[dict] = None) -> str:
-    """Root-relative ``pintu_out/<recipe>/<param-hash>/<w>x<h>.svg``; the hash covers ``multiples``."""
+def output_path(recipe: str, params: dict, w: float, h: float, multiples: Optional[dict] = None,
+                rc: Optional[dict] = None) -> str:
+    """Root-relative ``pintu_out/<recipe>/<param-hash>/<w>x<h>.svg``; the hash covers ``multiples`` and ``rc``."""
     safe = recipe.replace(":", ".")
     key = {**params, "__multiples__": multiples} if multiples else params
+    key = {**key, "__rc__": rc} if rc else key
     return f"{OUT_DIR}/{safe}/{param_hash(key)}/{_fmt(w)}x{_fmt(h)}.svg"
 
 
 def request_path(req: RenderRequest) -> str:
     """``output_path`` of a request."""
-    return output_path(req.recipe, req.params, req.width_mm, req.height_mm, req.multiples)
+    return output_path(req.recipe, req.params, req.width_mm, req.height_mm, req.multiples, req.rc)
 
 
 def recipe_python(project: Project) -> str:
@@ -114,11 +121,12 @@ def recipe_python(project: Project) -> str:
 
 def worker_request(project: Project, req: RenderRequest) -> dict:
     """The dict ``worker.render`` takes."""
-    pack = styles.for_project(project)
+    pack = styles.for_project(project).view(req.preset)
     return {"root": str(project.root), "recipe": req.recipe, "params": req.params,
             "width_mm": req.width_mm, "height_mm": req.height_mm, "multiples": req.multiples,
             "out": str(project.root / request_path(req)),
-            "fonts": list(pack.fonts), "font_paths": [str(p) for p in pack.font_paths]}
+            "fonts": list(pack.fonts), "font_paths": [str(p) for p in pack.font_paths],
+            "rc": req.rc or {}}
 
 
 def to_result(raw: dict, req: RenderRequest, stdout: str = "", stderr: str = "") -> RenderResult:
