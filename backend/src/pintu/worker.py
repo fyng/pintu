@@ -13,6 +13,7 @@ Request keys: ``root``, ``recipe`` (``module.path:function``), ``params``,
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib
 import json
@@ -27,20 +28,81 @@ LETTER_ZONE_MM = 5.0
 MARKER = "PINTU_RESULT "
 
 
-def _module_file(module) -> str | None:
-    return getattr(module, "__file__", None)
-
-
-def code_hash(module) -> str | None:
-    """sha256 of the recipe module's source file."""
-    f = _module_file(module)
-    if not f or not Path(f).exists():
+def module_path(root: str, name: str) -> Path | None:
+    """Source file of module ``name`` under the project root, or None."""
+    if not name or not all(part.isidentifier() for part in name.split(".")):
         return None
-    return hashlib.sha256(Path(f).read_bytes()).hexdigest()
+    base = Path(root).joinpath(*name.split("."))
+    for f in (base.with_suffix(".py"), base / "__init__.py"):
+        if f.is_file():
+            return f
+    return None
+
+
+def _imported(name: str, path: Path) -> list[str]:
+    """Module names a source file imports, with parent packages; relative imports resolved."""
+    try:
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+    except (SyntaxError, ValueError):
+        return []
+    pkg = name if path.name == "__init__.py" else name.rpartition(".")[0]
+    names = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                parts = pkg.split(".") if pkg else []
+                parts = parts[: len(parts) - node.level + 1]
+                base = ".".join(parts + ([node.module] if node.module else []))
+            if base:
+                names.append(base)
+            names += [f"{base}.{a.name}" if base else a.name for a in node.names]
+    out = []
+    for n in names:
+        parts = n.split(".")
+        out += [".".join(parts[: i + 1]) for i in range(len(parts))]
+    return out
+
+
+def local_deps(root: str, name: str) -> list[tuple[str, Path]]:
+    """Project-local modules ``name`` imports, transitively, dependencies first, ``name`` last.
+
+    Found by static import analysis; modules outside the root are skipped.
+    """
+    order: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+
+    def visit(n: str) -> None:
+        seen.add(n)
+        f = module_path(root, n)
+        if f is None:
+            return
+        for d in _imported(n, f):
+            if d not in seen:
+                visit(d)
+        order.append((n, f))
+
+    visit(name)
+    return order
+
+
+def code_hash(root: str, name: str) -> str | None:
+    """sha256 over the source files of a module and its project-local imports."""
+    deps = local_deps(root, name)
+    if not deps or deps[-1][0] != name:
+        return None
+    h = hashlib.sha256()
+    for n, f in deps:
+        h.update(n.encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()
 
 
 def load(root: str, recipe: str):
-    """Imports the recipe function, reloading its module if the file changed.
+    """Imports the recipe function, reloading its module and local imports if any file changed.
+
+    Changed modules reload dependencies first, so ``from x import y`` picks up new values.
 
     Returns:
         (function, module).
@@ -50,14 +112,14 @@ def load(root: str, recipe: str):
     mod_name, _, fn_name = recipe.partition(":")
     if not fn_name:
         raise ValueError(f"recipe must be 'module:function', got {recipe!r}")
+    chash = code_hash(root, mod_name)
     mod = sys.modules.get(mod_name)
-    if mod is None:
-        mod = importlib.import_module(mod_name)
-    else:
-        seen = getattr(mod, "__pintu_hash__", None)
-        if seen != code_hash(mod):
-            mod = importlib.reload(mod)
-    mod.__pintu_hash__ = code_hash(mod)
+    if mod is not None and getattr(mod, "__pintu_hash__", None) != chash:
+        for n, _ in local_deps(root, mod_name):
+            if n in sys.modules:
+                importlib.reload(sys.modules[n])
+    mod = importlib.import_module(mod_name)
+    mod.__pintu_hash__ = chash
     fn = mod
     for part in fn_name.split("."):
         fn = getattr(fn, part)
@@ -162,7 +224,7 @@ def render(req: dict) -> dict:
             fig.savefig(out, format="svg")
         summary = summarize(fig)
         plt.close(fig)
-        chash = code_hash(mod)
+        chash = mod.__pintu_hash__
         meta = {
             "recipe": req["recipe"],
             "params": req.get("params") or {},

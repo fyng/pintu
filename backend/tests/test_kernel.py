@@ -114,3 +114,27 @@ def test_missing_ipykernel(project, tmp_path):
     project.settings["kernel"] = {"python": str(fake)}
     res = run(KernelRunner(project).render(RenderRequest("rec:plot", {}, 50, 40)))
     assert not res.ok and "pip install ipykernel" in res.error
+
+
+def test_reloads_changed_dependencies(project, tmp_path):
+    (tmp_path / "leaf.py").write_text("LABEL = 'one'\n")
+    (tmp_path / "mid.py").write_text("from leaf import LABEL\n")
+    (tmp_path / "rec2.py").write_text(
+        "from matplotlib.figure import Figure\nfrom mid import LABEL\n\n"
+        "def plot(w, h):\n    fig = Figure(figsize=(w / 25.4, h / 25.4))\n"
+        "    fig.add_subplot().set_xlabel(LABEL)\n    return fig\n")
+
+    async def main():
+        r = KernelRunner(project)
+        try:
+            a = await r.render(RenderRequest("rec2:plot", {}, 60, 40))
+            assert a.ok, a.error
+            assert a.summary["axes"][0]["xlabel"] == "one"
+            (tmp_path / "leaf.py").write_text("LABEL = 'two'\n")
+            b = await r.render(RenderRequest("rec2:plot", {}, 60, 40))
+            assert b.ok, b.error
+            assert b.code_hash != a.code_hash
+            assert b.summary["axes"][0]["xlabel"] == "two"
+        finally:
+            await r.close()
+    run(main())

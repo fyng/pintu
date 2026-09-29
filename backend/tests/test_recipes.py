@@ -49,3 +49,19 @@ def test_subprocess_render_error(tmp_path):
     assert not res.ok and "expected matplotlib Figure" in res.error
     res = asyncio.run(SubprocessRunner(project).render(RenderRequest("rec:missing", {}, 50, 40)))
     assert not res.ok and "AttributeError" in res.error
+
+
+def test_code_hash_covers_local_imports(tmp_path):
+    from pintu.recipes import code_hash
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg/__init__.py").write_text("")
+    (tmp_path / "pkg/leaf.py").write_text("N = 1\n")
+    (tmp_path / "pkg/mid.py").write_text("from .leaf import N\n")
+    (tmp_path / "rec.py").write_text("import json\nfrom pkg import mid\n")
+    (tmp_path / "other.py").write_text("X = 1\n")
+    p = Project.open(tmp_path, create=True)
+    h = code_hash(p, "rec:plot")
+    (tmp_path / "other.py").write_text("X = 2\n")
+    assert code_hash(p, "rec:plot") == h  # not imported
+    (tmp_path / "pkg/leaf.py").write_text("N = 2\n")
+    assert code_hash(p, "rec:plot") != h  # transitive, relative import

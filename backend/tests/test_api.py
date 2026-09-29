@@ -86,3 +86,27 @@ def test_external_edit_reloads(demo):
             m = ws.receive_json()
             assert m["type"] == "board"
             assert m["board"]["panels"][2]["cell"] == [0, 18, 9, 36]
+
+
+def _wait_cell(c, cell, timeout=5.0):
+    state = c.app.state.pintu
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if state.boards["demo"].panel("bars")["cell"] == cell:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_external_revert_to_earlier_text_reloads(demo):
+    path = demo / "boards/demo.board.yaml"
+    with TestClient(create_app(Project.open(demo))) as c:
+        time.sleep(0.5)
+        r = c.post("/api/boards/demo/ops", json={"ops": [{"op": "set_cell", "id": "bars", "cell": [0, 18, 6, 36]}]})
+        assert r.status_code == 200, r.text
+        flush(c)
+        written = path.read_text()
+        path.write_text(written.replace("[0, 18, 6, 36]", "[0, 18, 9, 36]"))
+        assert _wait_cell(c, [0, 18, 9, 36])
+        path.write_text(written)  # hand-revert to the text pintu wrote
+        assert _wait_cell(c, [0, 18, 6, 36])
