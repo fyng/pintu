@@ -227,7 +227,7 @@ def parse(doc: dict, root: Optional[Path] = None, where: str = FILE) -> StylePac
     letter = _letter(_table(doc, "letter", where, {"size_pt", "weight", "case", "band_mm"}), f"{where} [letter]",
                      {"size_pt": 8.0, "weight": 700, "case": "lower", "band_mm": 3.5})
     margins = _margins(_table(doc, "margins", where, set(MARGIN_KEYS)), f"{where} [margins]",
-                       {"left": 12.0, "right": 1.5, "top": 1.0, "bottom": 7.5, "gap": 2.0, "tick": 4.0,
+                       {"left": 12.0, "right": 1.5, "top": 1.0, "bottom": 9.0, "gap": 2.0, "tick": 4.0,
                         "title": 3.0, "key": 3.5})
     text_pt = lint.get("text_pt", [5, 7])
     if not isinstance(text_pt, list) or len(text_pt) != 2:

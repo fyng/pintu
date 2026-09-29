@@ -51,7 +51,7 @@ def test_default_pack_matches_old_preset():
 
 def test_margins_accessor():
     m = style.margins(style.get("nature"))
-    assert m == {"left": 12.0, "right": 1.5, "top": 1.0, "bottom": 7.5, "gap": 2.0, "tick": 4.0,
+    assert m == {"left": 12.0, "right": 1.5, "top": 1.0, "bottom": 9.0, "gap": 2.0, "tick": 4.0,
                  "title": 3.0, "key": 3.5}
     m["left"] = 99  # a copy
     assert style.margins(style.get("nature"))["left"] == 12.0

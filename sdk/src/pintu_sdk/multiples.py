@@ -16,7 +16,7 @@ SHARE = ("all", "row", "col", "none")
 MM = 1 / 25.4
 MARGINS_ENV = "PINTU_MARGINS"
 """JSON margins pintu's render worker sets from the style pack."""
-MARGINS = {"left": 12.0, "right": 1.5, "top": 1.0, "bottom": 7.5, "gap": 2.0, "tick": 4.0,
+MARGINS = {"left": 12.0, "right": 1.5, "top": 1.0, "bottom": 9.0, "gap": 2.0, "tick": 4.0,
            "title": 3.0, "key": 3.5}
 """Margins in mm used outside pintu (same keys as ``pintu.style.margins``)."""
 

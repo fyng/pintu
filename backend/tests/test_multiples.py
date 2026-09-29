@@ -8,7 +8,7 @@ from pintu.board import Board, BoardError
 from pintu.cache import cache_key
 from pintu.project import Project
 from pintu.recipes import RenderRequest, SubprocessRunner
-from pintu.renders import request_for
+from pintu.renders import Renders, request_for
 from pintu.server import apply_ops, recipe_panel_id
 
 M = styles.margins(styles.get("nature"))
@@ -252,3 +252,16 @@ panels:
     assert x0 == pytest.approx(M["left"], abs=0.05)
     assert (tmp_path / res.svg).is_file() and "__multiples__" not in res.svg
 
+
+def test_demo_multiples_render_passes_default_lint(demo):
+    project = Project.open(demo)
+    b = Board.loads("""\
+page: {width: 183, height: 120, grid: 36, gutter: 3}
+panels:
+  - id: t
+    cell: [0, 0, 36, 12]
+    source: {recipe: recipes.cohort:timeline, multiples: {item: patient, mosaic: [[S009, S005, S002]]}}
+""")
+    res = asyncio.run(Renders(project, SubprocessRunner(project), on_done=None).render(request_for(b, b.panel("t"))))
+    assert res.ok, res.error
+    assert res.lint == [], res.lint
