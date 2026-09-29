@@ -11,7 +11,8 @@ Request keys: ``root``, ``recipe`` (``module.path:function``), ``params``,
 ``width_mm``, ``height_mm``, ``out`` (absolute SVG path); for a multiples
 panel ``multiples``: keyword arguments for the recipe (``mosaic``, ``share``,
 ratios) plus ``margins``, which reach ``pintu_sdk`` as ``PINTU_MARGINS``; and
-optionally ``fonts`` (the style pack's families) and ``font_paths`` (its font folders).
+optionally ``fonts`` (the style pack's families), ``font_paths`` (its font folders)
+and ``rc`` (matplotlib rcParams in force during the call; restored afterwards).
 """
 
 from __future__ import annotations
@@ -281,14 +282,15 @@ def render(req: dict) -> dict:
         w, h = float(req["width_mm"]), float(req["height_mm"])
         mult = dict(req.get("multiples") or {})
         os.environ[MARGINS_ENV] = json.dumps(mult.pop("margins", {}))
-        fig = fn(w, h, **(req.get("params") or {}), **mult)
-        if not isinstance(fig, Figure):
-            raise TypeError(f"recipe returned {type(fig).__name__}, expected matplotlib Figure")
-        out = Path(req["out"])
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with matplotlib.rc_context({"svg.fonttype": "none"}):
-            fig.savefig(out, format="svg")
-        summary = summarize(fig)
+        with matplotlib.rc_context(req.get("rc") or {}):
+            fig = fn(w, h, **(req.get("params") or {}), **mult)
+            if not isinstance(fig, Figure):
+                raise TypeError(f"recipe returned {type(fig).__name__}, expected matplotlib Figure")
+            out = Path(req["out"])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with matplotlib.rc_context({"svg.fonttype": "none"}):
+                fig.savefig(out, format="svg")
+            summary = summarize(fig)
         summary["fonts_found"] = fonts_found(req.get("fonts"))
         plt.close(fig)
         chash = mod.__pintu_hash__

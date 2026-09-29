@@ -97,5 +97,9 @@ def generate(board: Board, exists: Callable[[str], bool], name: str = "",
         ]
         if lt["weight"] != 700:
             args.append(f"letter-weight: {lt['weight']}")
+        if lt.get("color"):
+            args.append(f"letter-fill: rgb({typst_str(lt['color'])})")
+        if lt.get("font"):
+            args.append("letter-font: (" + ", ".join(typst_str(f) for f in lt["font"]) + ",)")
         lines.append(f"#board-panel({', '.join(args)})")
     return "\n".join(lines) + "\n"

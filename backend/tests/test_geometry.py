@@ -1,8 +1,8 @@
 import json
-from pathlib import Path
 
 import pytest
 import typst
+from conftest import KARE_SKIP, kare_dir
 
 from pintu import geometry as geo
 from pintu.render import library_source
@@ -10,8 +10,8 @@ from pintu.render import library_source
 N = 36
 DIVISORS = [n for n in range(1, N + 1) if N % n == 0]
 LENGTHS = [183.0, 170.0, 136.0, 89.0]
-DESIGN_SYSTEM = Path(__file__).resolve().parents[3] / "academic-design-system"
-FIG_TYP = DESIGN_SYSTEM / "formats/publication/fig.typ"
+KARE = kare_dir()
+FIG_TYP = KARE / "formats/publication/fig.typ" if KARE else None
 
 
 def cases():
@@ -51,11 +51,11 @@ def test_grid_matches_vendored_fig_span_in_typst(L, tmp_path):
         assert abs(pa - rat) < 0.01 and abs(pl - rln) < 0.01, (n, i, k)
 
 
-@pytest.mark.skipif(not FIG_TYP.exists(), reason="academic-design-system not checked out alongside")
+@pytest.mark.skipif(not (FIG_TYP and FIG_TYP.exists()), reason=KARE_SKIP)
 @pytest.mark.parametrize("L", LENGTHS)
-def test_grid_matches_design_system_fig_span(L):
+def test_grid_matches_kare_fig_span(L):
     ref = typst_spans('#import "/formats/publication/fig.typ": fig-span', "fig-span", L,
-                      root=str(DESIGN_SYSTEM))
+                      root=str(KARE))
     assert len(ref) == len(list(cases()))
     for (n, i, k), (rat, rln) in zip(cases(), ref):
         pa, pl = geo.span(L, N, i * N // n, (i + k) * N // n)

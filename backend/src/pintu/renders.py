@@ -48,7 +48,8 @@ class PanelRender:
 def request_for(board: Board, panel: dict) -> Optional[RenderRequest]:
     """The render a recipe panel needs below its letter band, or None for other panels.
 
-    A multiples panel's request carries its mosaic, share and ratios, and the style's margins.
+    A multiples panel's request carries its mosaic, share and ratios, and the style's margins
+    at the panel's render size. The request names the board's preset and carries its rc.
     """
     src = panel.get("source") or {}
     if "recipe" not in src:
@@ -56,8 +57,9 @@ def request_for(board: Board, panel: dict) -> Optional[RenderRequest]:
     _, _, w, h = board.content_rect(panel)
     params = json.loads(json.dumps(src.get("params") or {}, default=str))
     m = src.get("multiples")
-    m = {**mult.call_kwargs(m), "margins": styles.margins(board.preset)} if isinstance(m, dict) else None
-    return RenderRequest(str(src["recipe"]), params, round(w, 2), round(h, 2), m)
+    w, h = round(w, 2), round(h, 2)
+    m = {**mult.call_kwargs(m), "margins": styles.margins(board.preset, w, h)} if isinstance(m, dict) else None
+    return RenderRequest(str(src["recipe"]), params, w, h, m, board.preset["name"], board.preset["rc"] or None)
 
 
 class Renders:
@@ -164,7 +166,7 @@ class Renders:
     def _lint(self, req: RenderRequest, res: RenderResult) -> RenderResult:
         """Sets ``res.lint`` from its summary at the requested size."""
         if res.ok:
-            res.lint = lint.check(res.summary, req.width_mm, req.height_mm, self.pack)
+            res.lint = lint.check(res.summary, req.width_mm, req.height_mm, self.pack.view(req.preset))
         return res
 
     async def _drain(self) -> None:

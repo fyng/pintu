@@ -129,6 +129,8 @@ def test_request_and_cache_key_include_mosaic_and_share():
     keys = {cache_key(request_for(x, x.panel("km")), "h") for x in (b, b2, b3)}
     assert len(keys) == 3
     assert request_for(b, b.panel("t")).multiples is None
+    # The default pack sets no rc, so keys and paths are as before rc existed.
+    assert req.rc is None and "rc:" not in cache_key(req, "h") and req.preset == "nature"
 
 
 def test_group_letters_and_bands():
@@ -251,6 +253,34 @@ panels:
     x0 = min(a["bbox_mm"][0] for a in res.summary["axes"])
     assert x0 == pytest.approx(M["left"], abs=0.05)
     assert (tmp_path / res.svg).is_file() and "__multiples__" not in res.svg
+
+
+def test_scaled_margins_use_panel_render_size(tmp_path):
+    """A pack margin rule scales the margins the request carries; the SDK lays out with them."""
+    (tmp_path / "sdk.py").write_text(SDK)
+    d = tmp_path / "pack"
+    d.mkdir()
+    (d / "stylepack.toml").write_text('[pack]\nname = "s"\ndefault_preset = "a"\n'
+                                      "[margins.scale]\nref_mm = [30, 24]\ndiscount = 0.5\nfixed = {left = 6}\n"
+                                      "[presets.a]\nwidths = {full = 183}\nmax_height = 170\n")
+    pack = styles.load(d)
+    b = Board.loads("""\
+page: {width: 183, height: 120, grid: 36, gutter: 3}
+panels:
+  - id: s
+    cell: [0, 0, 36, 18]
+    letter: false
+    source: {recipe: sdk:one, multiples: {item: cohort, mosaic: [[A, B], [C, .]], share: {x: all, y: none}}}
+""", pack)
+    req = request_for(b, b.panel("s"))
+    w, h = req.width_mm, req.height_mm
+    k = 1 + 0.5 * ((w * h / 720) ** 0.5 - 1)
+    m = req.multiples["margins"]
+    assert m == styles.margins(b.preset, w, h) and m["left"] == pytest.approx(6 + 6 * k, abs=1e-3)
+    assert m["gap"] == pytest.approx(2 * k, abs=1e-3) and m != M
+    res = asyncio.run(SubprocessRunner(Project.open(tmp_path)).render(req))
+    assert res.ok, res.error
+    assert min(a["bbox_mm"][0] for a in res.summary["axes"]) == pytest.approx(m["left"], abs=0.05)
 
 
 def test_demo_multiples_render_passes_default_lint(demo):

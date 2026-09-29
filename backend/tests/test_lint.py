@@ -4,18 +4,22 @@ import time
 from pathlib import Path
 
 import pytest
+from conftest import KARE_SKIP, kare_dir
 from fastapi.testclient import TestClient
 
 from pintu import agent as ag, lint, style
+from pintu.board import Board
+from pintu.cache import cache_key
 from pintu.llm import LLM, Profile
 from pintu.project import Project
 from pintu.recipes import RenderRequest, SubprocessRunner
-from pintu.renders import Renders
+from pintu.renders import Renders, request_for
 from pintu.server import create_app
 
 REPO = Path(__file__).resolve().parents[2]
 STRICT = REPO / "examples" / "stylepacks" / "strict"
-PLEX = REPO.parent / "academic-design-system" / "core" / "fonts" / "ibm-plex-sans"
+KARE = kare_dir()
+PLEX = KARE / "core" / "fonts" / "ibm-plex-sans" if KARE else None
 
 RECIPES = '''from matplotlib.figure import Figure
 
@@ -199,7 +203,7 @@ def test_missing_pack_font(tmp_path):
     assert any("not found by Typst" in w for w in warnings) and any("matplotlib" in w for w in warnings)
 
 
-@pytest.mark.skipif(not PLEX.is_dir(), reason="academic-design-system not checked out alongside")
+@pytest.mark.skipif(not (PLEX and PLEX.is_dir()), reason=KARE_SKIP)
 def test_pack_font_paths(tmp_path):
     """A pack that ships a font: Typst and the recipe kernel both find it."""
     d = tmp_path / "p"
@@ -227,3 +231,77 @@ def test_agent_context_has_pack_rules_and_lint(tmp_path):
     assert "tick-labels: " in body and "is 4 pt (allowed 5-6 pt)" in body
     out, _ = asyncio.run(a.call("render_panel", {"id": "t"}))
     assert "tick-labels: " in out
+
+
+RC_PACK = """\
+[pack]
+name = "rc"
+default_preset = "a"
+
+[matplotlib]
+rc = {"axes.linewidth" = 0.5, "xtick.labelsize" = 5, "ytick.labelsize" = 5}
+
+[[lint.rules]]
+id = "axis-lines"
+property = "spine_width_pt"
+max = 1
+
+[presets.a]
+widths = {full = 183}
+max_height = 170
+
+[presets.b]
+widths = {full = 183}
+max_height = 170
+matplotlib = {rc = {"axes.linewidth" = 1.25}}
+lint = {rules = [{id = "tick-labels", property = "tick_label_pt", min = 6}]}
+"""
+
+RC_PROBE = '''from matplotlib.figure import Figure
+
+
+def probe(w, h):
+    fig = Figure(figsize=(w / 25.4, h / 25.4))
+    ax = fig.add_axes([0.25, 0.3, 0.7, 0.6])
+    ax.plot([0, 1], [0, 1], lw=1)
+    return fig
+'''
+
+
+def test_pack_rc_and_preset_lint_in_render(tmp_path):
+    """The kernel applies the preset's merged rc; lint uses the preset's merged rules."""
+    d = tmp_path / "pack"
+    d.mkdir()
+    (d / "stylepack.toml").write_text(RC_PACK)
+    (tmp_path / "proj").mkdir()
+    project = make(tmp_path / "proj", d)
+    (project.root / "probe.py").write_text(RC_PROBE)
+    rs = Renders(project, SubprocessRunner(project), on_done=None)
+    out = {}
+    for name in ("a", "b"):
+        b = Board.loads(f"version: 1\npage: {{width: 183, height: 60, style: {name}}}\npanels:\n"
+                        "  - {id: t, cell: [0, 0, 18, 36], source: {recipe: 'probe:probe'}}\n", rs.pack)
+        req = request_for(b, b.panel("t"))
+        out[name] = req, asyncio.run(rs.render(req))
+        assert out[name][1].ok, out[name][1].error
+    (ra, a), (rb, b) = out["a"], out["b"]
+    assert ra.rc["axes.linewidth"] == 0.5 and rb.rc["axes.linewidth"] == 1.25 and ra.preset == "a"
+    assert a.summary["spine_width_pt"] == [0.5] and b.summary["spine_width_pt"] == [1.25]
+    assert {t["fontsize_pt"] for t in a.summary["texts"]} == {5}
+    assert rules(a) == set() and rules(b) == {"axis-lines", "tick-labels"}
+    assert cache_key(ra, "h") != cache_key(rb, "h") and a.svg != b.svg
+
+
+def test_worker_rc_does_not_leak(tmp_path):
+    import matplotlib
+    from pintu import worker
+    (tmp_path / "probe.py").write_text(RC_PROBE)
+    base = dict(root=str(tmp_path), recipe="probe:probe", width_mm=60, height_mm=40)
+    before = matplotlib.rcParams["axes.linewidth"]
+    res = worker.render({**base, "out": str(tmp_path / "a.svg"), "rc": {"axes.linewidth": 1.5}})
+    assert res["ok"] and res["summary"]["spine_width_pt"] == [1.5]
+    assert matplotlib.rcParams["axes.linewidth"] == before
+    res = worker.render({**base, "out": str(tmp_path / "b.svg")})
+    assert res["summary"]["spine_width_pt"] == [before]
+    res = worker.render({**base, "out": str(tmp_path / "c.svg"), "rc": {"axes.no_such_key": 1}})
+    assert not res["ok"] and "axes.no_such_key" in res["error"]
