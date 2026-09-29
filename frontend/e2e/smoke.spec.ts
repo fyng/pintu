@@ -39,6 +39,7 @@ test("edit the demo board", async ({ page }) => {
   await expect(page.getByTestId("inspector")).toContainText("heatmap");
 
   // Drop a file from the browser onto the freed cells.
+  await page.getByRole("button", { name: "Files" }).click();
   await page.getByText("plots/", { exact: true }).click();
   const src = await box(page, "li.file >> text=lines.pdf");
   const c = await box(page, '[data-panel="heatmap"] .body');

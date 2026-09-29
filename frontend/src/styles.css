@@ -1,7 +1,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #222; }
 button { font: inherit; }
-.app { display: grid; grid-template: "h h h" auto "a m s" 1fr / 220px 1fr 380px; height: 100vh; }
+.app { display: grid; grid-template: "h h h" auto "a m s" 1fr / 280px 1fr 380px; height: 100vh; }
 header { grid-area: h; display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #ddd; flex-wrap: wrap; }
 aside { grid-area: a; overflow: auto; border-right: 1px solid #ddd; }
 main { grid-area: m; overflow: auto; background: #eef0f2; }
@@ -58,3 +58,21 @@ line.fine { stroke: #d5dde8; stroke-width: 0.12; }
 .modal .cm { flex: 1; overflow: hidden; border: 1px solid #ccc; }
 .modal .cm .cm-editor { height: 100%; }
 .cm-def-line { background: #fff3c4; }
+.tabs { display: flex; border-bottom: 1px solid #ddd; position: sticky; top: 0; background: #fff; z-index: 1; }
+.tabs button { flex: 1; border: 0; background: none; padding: 5px; cursor: pointer; color: #555; }
+.tabs button.on { color: #1f5fbf; font-weight: 600; box-shadow: inset 0 -2px #1f5fbf; }
+.gallery { padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+.gallery-bar { display: flex; flex-direction: column; gap: 4px; }
+.gallery-bar select, .gallery-bar input, .facet input { width: 100%; font: inherit; }
+.facet { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; font-size: 12px; }
+.facet > span { font-weight: 600; margin-right: 2px; }
+.facet button { border: 1px solid #ccc; background: #fff; border-radius: 3px; padding: 0 4px; cursor: pointer; font-size: 12px; }
+.facet button.on { background: #1f5fbf; border-color: #1f5fbf; color: #fff; }
+.facet small { opacity: 0.6; }
+.gallery h4 { margin: 6px 0 2px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thumbs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
+.thumb { margin: 0; border: 1px solid #ddd; border-radius: 3px; background: #fff; cursor: grab; touch-action: none; overflow: hidden; }
+.thumb.linked { border-color: #9db8e0; }
+.thumb.dragging { opacity: 0.5; }
+.thumb img { display: block; width: 100%; aspect-ratio: 3 / 2; object-fit: contain; background: #fff; }
+.thumb figcaption { font-size: 11px; padding: 1px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #444; }

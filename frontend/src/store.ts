@@ -18,6 +18,8 @@ interface State {
   /** Milliseconds from the last commit to its preview arriving. */
   latency: number | null;
   pendingSince: number | null;
+  /** Bumped when the gallery catalog changes on disk. */
+  galleryRev: number;
   load: (name: string) => Promise<void>;
   select: (id: string | null) => void;
   commit: (ops: Op[]) => Promise<void>;
@@ -34,6 +36,7 @@ export const useStore = create<State>((set, get) => ({
   warnings: [],
   latency: null,
   pendingSince: null,
+  galleryRev: 0,
 
   load: async (name) => {
     const board = await api.board(name);
@@ -72,6 +75,8 @@ export const useStore = create<State>((set, get) => ({
       if (get().preview && msg.rev < get().preview!.rev) return;
       const since = get().pendingSince;
       set({ preview: { svg: msg.svg, rev: msg.rev, ms: msg.ms }, latency: since === null ? get().latency : performance.now() - since, pendingSince: null });
+    } else if (msg.type === "gallery") {
+      set({ galleryRev: get().galleryRev + 1 });
     } else if (msg.type === "error" && b && msg.name === b.name) {
       set({ error: msg.message });
     }

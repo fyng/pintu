@@ -5,7 +5,9 @@ from __future__ import annotations
 import pickle
 from typing import Any, Callable
 
-__all__ = ["cache", "cache_clear"]
+from .save import save
+
+__all__ = ["cache", "cache_clear", "save"]
 
 _memo: dict = {}
 

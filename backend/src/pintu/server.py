@@ -21,8 +21,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from watchfiles import PythonFilter, awatch
 
-from . import codegen, style as styles
+from . import codegen, gallery, style as styles
 from .board import Board, BoardError
+from .catalog import Catalog
 from .kernel import KernelRunner
 from .project import BOARD_SUFFIX, IMAGE_KINDS, PathError, Project
 from .recipes import Runner, locate
@@ -203,7 +204,9 @@ def apply_ops(project: Project, board: Board, ops: list[dict]) -> list[str]:
         if kind == "set_cell":
             board.set_cell(op["id"], op["cell"])
         elif kind == "add":
-            board.add_panel(op["cell"], _check_file(project, op.get("file")), op.get("id"))
+            pid = board.add_panel(op["cell"], _check_file(project, op.get("file")), op.get("id"))
+            if op.get("recipe"):
+                board.set_recipe(pid, str(op["recipe"]), op.get("params"))
         elif kind == "remove":
             board.remove_panel(op["id"])
         elif kind == "set_source":
@@ -244,6 +247,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
         runner: Recipe runner; defaults to a ``KernelRunner``.
     """
     state = State(project, runner)
+    catalog = Catalog(project)
 
     async def watcher() -> None:
         project.boards_dir.mkdir(exist_ok=True)
@@ -281,7 +285,8 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         state.renders.start()
-        tasks = [asyncio.create_task(watcher()), asyncio.create_task(recipe_watcher())] if watch else []
+        tasks = [asyncio.create_task(watcher()), asyncio.create_task(recipe_watcher()),
+                 asyncio.create_task(gallery.watch(catalog, state.broadcast))] if watch else []
         yield
         for task in tasks:
             task.cancel()
@@ -289,9 +294,11 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
                 await task
         await state.renders.stop()
         state.writer.shutdown(wait=True)
+        catalog.close()
 
     app = FastAPI(title="pintu", lifespan=lifespan)
     app.state.pintu = state
+    app.include_router(gallery.router(catalog))
 
     @app.get("/api/project")
     def get_project():

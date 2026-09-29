@@ -10,3 +10,11 @@ Two boards:
 ```sh
 uv run --project ../../backend pintu serve --project .     # then open ?board=recipes
 ```
+
+Gallery: `scripts/make_gallery.py` writes 300 synthetic patient timelines to
+`scratch/timelines/` with `pintu_sdk.save`, linked to `recipes.cohort:timeline`.
+Filter them by patient, arm or stage in the gallery and drag one onto the board.
+
+```sh
+uv run --project ../../backend python scripts/make_gallery.py
+```
