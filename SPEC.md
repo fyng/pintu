@@ -353,6 +353,24 @@ results. Repeat until the model stops or reaches the step cap (default 20).
 **MCP server.** Exposes the same operations (`get_board`, `set_cell`,
 `render_panel`, `lint`), so terminal agents can drive an open board.
 
+**Harness choice.** pintu keeps its own loop. opencode (MIT) was assessed as an
+embedded harness on 2026-09-29 and not adopted:
+
+- it always sends tools, so the `tools = false` fallback breaks (issue #35432);
+- file undo needs a git repo;
+- its v2 server API is marked experimental and ships near-daily;
+- it adds a ~185 MB Bun binary beside Python; Windows support leans on WSL;
+- its UI is SolidJS, so the React chat panel is built anyway.
+
+pintu borrows its API shape for B3: sessions with typed message parts (text,
+reasoning, tool call with state, patch), a session status map (idle, busy,
+retry), abort, child sessions, and a staged revert. One session runs per panel;
+several run at once. The chat panel lists running sessions with live progress,
+stop and trace. A resize outside the size range starts a templated "Adapt to
+size" session. External agents, opencode among them, drive the board through
+the MCP server. Revisit embedding once opencode's v2 API is stable and #35432 is
+fixed.
+
 ## 10. Style packs
 
 A style pack is a folder with `stylepack.toml`: journal presets (widths, height
@@ -418,7 +436,7 @@ before the build starts:
 |---|---|---|
 | B1 | Gallery and catalog, sidecars, parameter filters, multiples panels, groups | Browse 300 patient timelines; drag 3 into one multiples panel and reorder them |
 | B2 | Lint, style packs, the `academic-design-system` pack | Design-system rules flag a panel with 4 pt ticks |
-| B3 | Chat panel, checkpoints, diff view, Promote to recipe, MCP server | A full stage 1 → 3 loop on one figure without leaving pintu |
+| B3 | Chat panel with session manager (list, status, stop, trace; §9 "Harness choice"), checkpoints, diff view, Promote to recipe, MCP server | A full stage 1 → 3 loop on one figure without leaving pintu |
 | B4 | Release hardening: first-run wizard, updater, docs, CI screenshot tests on WebKit and WebView2 | v1.0 tagged; a new user builds a figure from the example project |
 | B5 | Layout templates | – |
 
@@ -457,6 +475,58 @@ pintu/
 | Gallery thumbnail grid, 300 items | First screen < 1 s; the rest load lazily |
 | App start to usable board, after the first run | < 5 s |
 
+### 12.5 Status (2026-09-29)
+
+Branch `prototype` holds P1 and P2. P4 is committed as WIP on branch `p4`
+(worktree `../pintu-wt/p4`), not merged. No review gate yet.
+
+**Prototype steps**
+
+- [x] P1 Layout loop. Fig. 1–3 wireframes rebuilt (23 panels, error < 1e-13 mm);
+  geometry matches `fig-span` to 0.01 mm for every n dividing 36; preview median
+  30–70 ms, max 362 ms (1 of 90 edits over budget, on the network filesystem).
+- [x] P2 Resize loop. Kernel runner, render cache, recipe watch, "Open code",
+  `pintu-sdk` with `cache`. Warm resize median 209–387 ms; recipe save to board
+  re-rendered median 808 ms. Measured with a scripted file write, not VS Code.
+- [ ] P3 Packaging spike. Deferred; no Rust toolchain on the dev host.
+- [ ] P4 Agent spike, in progress.
+  - [x] LLM client and profiles, agent loop, tools (without `run_python`),
+    `pintu agent` and `pintu adapt` commands, eval harness with 5 tasks.
+  - [x] Eval on GLM-5.3-Flash (local vLLM), `tools = true`: 5 of 5 automatic
+    passes.
+  - [ ] Human acceptance of the 5 diffs.
+  - [ ] Eval with `tools = false`: rerun started, not finished. The first run
+    scored 0 of 5, because vLLM's glm47 parser strips `<tool_call>` text even
+    when no tools are sent. The text protocol now uses fenced `tool_call_json`
+    blocks. In the rerun, task 2 stopped at step 1 without a tool call; cause
+    unknown.
+  - [ ] Eval on a hosted model: no endpoint yet.
+  - [ ] Merge into `prototype`; switch `render_panel` from the subprocess runner
+    to the kernel (`state.renders.render`); rerun the eval.
+
+**Known bugs and gaps**
+
+- Saving a module that a recipe imports does not re-render; only the recipe's
+  own module is hashed. A kernel restart picks the change up.
+- The board watcher ignores an outside write whose text matches a version pintu
+  wrote recently, so hand-reverting a board file to an earlier text is ignored.
+- "Open in editor" via `$EDITOR` does nothing useful for terminal editors or a
+  remote backend; the built-in view is the fallback.
+- The first render after a kernel interrupt sometimes takes 2–5 s; cause unknown.
+- SVG text falls back to another font when the style pack's font is not
+  installed (IBM Plex Sans is missing on the dev host).
+- Preview tail latency on the network filesystem reaches 362 ms; file-existence
+  checks in codegen are the likely cause, not yet measured.
+- Not built: undo, typed cell entry, board rename and delete, the min/max size
+  badge (cut from the prototype).
+
+**Dev setup notes**
+
+- Node 22 comes from the conda env `pintu-node`; the system Node (v10) is too
+  old.
+- The tracked repo must not name the reference project; its ported recipes and
+  exit-test boards live in git-ignored `local/`.
+
 ## 13. Risks
 
 - **WebKit (macOS) and WebView2 (Windows) render differently.** P3 tests it; B4
@@ -478,4 +548,7 @@ pintu/
 
 ## 15. Open questions
 
-None.
+- This spec names the reference project, while the tracked repo must not. Reword
+  the spec, or keep it as the one exception?
+- P4 has only a local endpoint. Which hosted model runs the second half of the
+  P4 exit test?
