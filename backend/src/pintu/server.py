@@ -10,6 +10,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
@@ -55,7 +56,10 @@ class State:
         self.project = project
         self.boards: dict[str, Board] = {}
         self.rev: dict[str, int] = {}
-        self.written: dict[str, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=32))
+        # Board text pintu holds as current, and its board writes not yet on disk.
+        self.text: dict[str, str] = {}
+        self.pending: collections.Counter = collections.Counter()
+        self._pending_lock = threading.Lock()
         # One writer thread keeps disk writes ordered and off the preview path.
         self.writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pintu-writer")
         self.clients: set[WebSocket] = set()
@@ -77,10 +81,19 @@ class State:
     def save(self, name: str, board: Board) -> None:
         """Takes the board as current and queues its file write."""
         text = board.dumps()
-        self.written[name].append(text)
+        self.text[name] = text
+        with self._pending_lock:
+            self.pending[name] += 1
         self.boards[name] = board
         self.rev[name] = self.rev.get(name, 0) + 1
-        self.writer.submit(self.project.board_path(name).write_text, text, encoding="utf-8")
+        self.writer.submit(self._write, name, text)
+
+    def _write(self, name: str, text: str) -> None:
+        try:
+            self.project.board_path(name).write_text(text, encoding="utf-8")
+        finally:
+            with self._pending_lock:
+                self.pending[name] -= 1
 
     def file_ok(self, rel: str) -> bool:
         try:
@@ -243,7 +256,8 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
                 if not path.exists():
                     continue
                 text = path.read_text(encoding="utf-8")
-                if text in state.written[name]:
+                # Skip pintu's own writes: the current text, or older text while newer writes are queued.
+                if text == state.text.get(name) or state.pending[name] > 0:
                     continue
                 async with state.lock:
                     try:
@@ -251,7 +265,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
                     except BoardError as e:
                         await state.broadcast({"type": "error", "name": name, "message": str(e)})
                         continue
-                    state.written[name].append(text)
+                    state.text[name] = text
                     state.boards[name] = board
                     state.rev[name] = state.rev.get(name, 0) + 1
                     await state.publish(name)

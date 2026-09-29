@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Protocol
 
+from . import worker
 from .project import Project
 
 OUT_DIR = "pintu_out"
@@ -49,7 +50,7 @@ class RenderResult:
         ok: Whether the recipe returned a Figure and the SVG was saved.
         svg: Root-relative SVG path, or None on failure.
         error: Traceback text on failure.
-        code_hash: sha256 of the recipe module source.
+        code_hash: sha256 of the recipe module and its project-local imports.
         summary: ``worker.summarize`` output: size, axes, texts, overflow.
         stdout: Captured recipe stdout.
         stderr: Captured recipe stderr.
@@ -148,20 +149,12 @@ class SubprocessRunner:
 
 def module_file(project: Project, recipe: str) -> Optional[Path]:
     """The recipe module's source file under the project root, or None."""
-    mod = recipe.partition(":")[0]
-    if not mod or not all(part.isidentifier() for part in mod.split(".")):
-        return None
-    base = project.root.joinpath(*mod.split("."))
-    for f in (base.with_suffix(".py"), base / "__init__.py"):
-        if f.is_file():
-            return f
-    return None
+    return worker.module_path(str(project.root), recipe.partition(":")[0])
 
 
 def code_hash(project: Project, recipe: str) -> Optional[str]:
-    """sha256 of the recipe module's file, as ``worker.code_hash`` computes it."""
-    f = module_file(project, recipe)
-    return hashlib.sha256(f.read_bytes()).hexdigest() if f else None
+    """Hash of the recipe module and its project-local imports, as the worker computes it."""
+    return worker.code_hash(str(project.root), recipe.partition(":")[0])
 
 
 def locate(project: Project, recipe: str) -> Optional[tuple[Path, int]]:

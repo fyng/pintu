@@ -249,7 +249,8 @@ def timeline(w, h, patient):
 
 1. The canvas shows the old image scaled, with the new size.
 2. The backend looks up `(code_hash, params, w, h)` in the cache.
-3. On a miss, the kernel reloads the module if its hash changed, calls the recipe,
+3. On a miss, the kernel reloads the module if its hash changed (`code_hash` covers
+   the project-local modules it imports; dependencies reload first), calls the recipe,
    and saves SVG with `svg.fonttype = "none"`, so text stays text.
 4. Typst recompiles the board, and the frontend swaps the image in.
 
@@ -511,12 +512,6 @@ gate yet.
 
 **Known bugs and gaps**
 
-- Saving a module that a recipe imports does not re-render; only the recipe's
-  own module is hashed. A kernel restart picks the change up. The agent's
-  `render_panel` shares this: after an edit to a helper module it gets a stale
-  render.
-- The board watcher ignores an outside write whose text matches a version pintu
-  wrote recently, so hand-reverting a board file to an earlier text is ignored.
 - "Open in editor" via `$EDITOR` does nothing useful for terminal editors or a
   remote backend; the built-in view is the fallback.
 - The first render after a kernel interrupt sometimes takes 2–5 s; cause unknown.
