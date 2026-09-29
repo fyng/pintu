@@ -499,7 +499,7 @@ gate yet.
     task 5 accepted only without its ad hoc y-limit block. Tasks 2, 4 and 5 each
     added their own letter-zone clearance; it belongs in the shared panel
     helper or pintu's panel margins. Tasks took 2–25 min each.
-  - [ ] Eval with `tools = false`: not finished. The first run scored 0 of 5,
+  - [x] Eval with `tools = false`: 5 of 5 on the kernel path (below). The first run scored 0 of 5,
     because vLLM's glm47 parser strips `<tool_call>` text even when no tools are
     sent; the text protocol now uses fenced `tool_call_json` blocks. In the rerun,
     task 1 passed, task 2 stopped at step 1 on a reply that announced a call but
@@ -510,8 +510,15 @@ gate yet.
   - [x] Merge into `prototype`; `render_panel` renders through the kernel
     (`Renders.render`, the board's path); the CLI builds its own
     (`agent.local_renders`).
-  - [ ] Rerun the eval on the kernel path, `tools = true` and `false`: the
-    endpoint was stopped.
+  - [x] Rerun the eval on the kernel path, `tools = true` and `false`. First
+    run: tools 4 of 5 (task 3 hit the step cap on repeated `edit_file`
+    old_string misses); text 4 of 5 (task 2 sent an edit fence missing its last
+    `}`, parsed as no call, ended "done" unchanged). Fixes: a call missing only
+    its final closers is repaired, any other broken call returns an error
+    result; an `edit_file` miss returns the closest region with line numbers
+    and how it differs, a multiple match lists its lines. Rerun: tools 5 of 5
+    (4–17 steps), text 5 of 5 (3–11 steps), all stopped "done". Neither new
+    message appears in the rerun transcripts, so the pass does not prove them.
 
 **Known bugs and gaps**
 
