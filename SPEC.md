@@ -577,8 +577,8 @@ pintu/
 Branch `prototype` holds P1, P2 and the P4 spike (merged from `p4`).
 
 **Gate (2026-09-29):** P1 and P2 accepted. P3 deferred; the build starts
-without it, and P3 must pass before B4. P4 is reviewed once the hosted-model
-eval runs. No stack change.
+without it, and P3 must pass before B4. P4 closed on the local model alone;
+the hosted-model half moves to §14 (OpenRouter). No stack change.
 
 **Prototype steps**
 
@@ -592,7 +592,8 @@ eval runs. No stack change.
   accepted as is.
 - [ ] P3 Packaging spike. Deferred at the gate; no Rust toolchain on the dev
   host. Must pass before B4.
-- [ ] P4 Agent spike, in progress.
+- [x] P4 Agent spike. Closed on the local model (GLM-5.3-Flash); hosted models
+  are best effort until the OpenRouter eval (§14).
   - [x] LLM client and profiles, agent loop, tools (without `run_python`),
     `pintu agent` and `pintu adapt` commands, eval harness with 5 tasks.
   - [x] Eval on GLM-5.3-Flash (local vLLM), `tools = true`: 5 of 5 automatic
@@ -614,8 +615,8 @@ eval runs. No stack change.
     type not supported"). gpt-4o with `vision = false`: 5 of 5 automatic passes
     in 10–27 s per task, but 2 of 5 accepted by review (tasks 2 and 5). Task 4
     swapped the axis labels and tasks 1 and 3 barely adapted or overlapped the
-    data; the automatic checks missed all three. Pending a stronger hosted
-    model with vision.
+    data; the automatic checks missed all three. Deferred: rerun on a hosted
+    model with vision through OpenRouter (§14).
   - [x] Merge into `prototype`; `render_panel` renders through the kernel
     (`Renders.render`, the board's path); the CLI builds its own
     (`agent.local_renders`).
@@ -699,6 +700,8 @@ eval runs. No stack change.
 
 ## 14. Future
 
+- Hosted-model eval through an OpenRouter profile (a model with vision and tool
+  calling), to finish the hosted half of the P4 exit test.
 - Layout templates: a board with empty slots, filled from the gallery.
 - Automatic SSH tunnelling, after a security review.
 - Plotting languages other than Python, through a subprocess recipe contract.
