@@ -122,7 +122,7 @@ export function Canvas() {
                   </text>
                 )}
               </svg>
-              {p.render && p.render.status !== "ok" && <RenderBadge x={x + w} y={y} status={p.render} />}
+              {p.render && (p.render.status !== "ok" || p.render.lint?.length) && <RenderBadge x={x + w} y={y} status={p.render} />}
               <rect className="body" x={x} y={y} width={w} height={h} onPointerDown={(e) => down(e, p, "move")} />
               {(["n", "s", "e", "w", "ne", "nw", "se", "sw"] as Handle[]).map((hd) => {
                 const hx = hd.includes("w") ? x - EDGE / 2 : hd.includes("e") ? x + w - EDGE / 2 : x + EDGE / 2;
@@ -153,13 +153,23 @@ const BADGE: Record<string, [string, string]> = {
   missing: ["missing recipe", "badge-missing"],
 };
 
+/** Badge label, class and tooltip: the render state, or the lint count of a good render. */
+function badge(status: RenderStatus): [string, string, string] {
+  if (status.status === "ok") {
+    const n = status.lint?.length ?? 0;
+    return [`lint: ${n}`, "badge-lint", (status.lint ?? []).map((i) => `${i.rule}: ${i.message}`).join("\n")];
+  }
+  const [label, cls] = BADGE[status.status];
+  return [label, cls, status.error ?? label];
+}
+
 /** Render state of a recipe panel, at its top-right corner. */
 function RenderBadge({ x, y, status }: { x: number; y: number; status: RenderStatus }) {
-  const [label, cls] = BADGE[status.status];
+  const [label, cls, tip] = badge(status);
   const bw = label.length * 1.35 + 2;
   return (
-    <g className={`badge ${cls}`} data-testid="render-badge" data-status={status.status}>
-      <title>{status.error ?? label}</title>
+    <g className={`badge ${cls}`} data-testid={status.status === "ok" ? "lint-badge" : "render-badge"} data-status={status.status}>
+      <title>{tip}</title>
       <rect x={x - bw - 0.5} y={y + 0.5} width={bw} height={3.4} rx={0.8} />
       <text x={x - bw / 2 - 0.5} y={y + 2.9}>{label}</text>
     </g>

@@ -65,16 +65,17 @@ class State:
         self.writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pintu-writer")
         self.clients: set[WebSocket] = set()
         self.lock = asyncio.Lock()
+        self.pack = styles.for_project(project)
         self.renders = Renders(project, runner or KernelRunner(project), self._rendered,
                                save=lambda: self.writer.submit(self.renders.cache.save))
-        self.renderer = Renderer(project, recipe_svg=self.renders.shown)
+        self.renderer = Renderer(project, recipe_svg=self.renders.shown, pack=self.pack)
 
     def get(self, name: str) -> Board:
         if name not in self.boards:
             path = self.project.board_path(name)
             if not path.exists():
                 raise HTTPException(404, f"no board {name!r}")
-            self.boards[name] = Board.load(path)
+            self.boards[name] = Board.load(path, self.pack)
             self.rev[name] = 1
             self.renders.sync(name, self.boards[name])
         return self.boards[name]
@@ -106,10 +107,10 @@ class State:
         """Board state for the frontend."""
         b = self.get(name)
         page = b.page
-        st = styles.get(b.style)
+        st = b.preset
         letters = b.letters()
         bands = b.bands()
-        panels, warnings = [], []
+        panels, warnings = [], styles.font_problems(self.pack, self.renders.fonts_found)
         if page.height > st["max_height"]:
             warnings.append(f"page height {page.height:g} mm exceeds the {st['name']} cap of {st['max_height']:g} mm")
         for p in b.panels:
@@ -137,7 +138,7 @@ class State:
             "rev": self.rev[name],
             "page": {"width": page.width, "height": page.height, "grid": [page.nx, page.ny],
                      "gutter": page.gutter, "style": b.style},
-            "preset": {"widths": st["widths"], "maxHeight": st["max_height"],
+            "preset": {"pack": self.pack.name, "name": st["name"], "widths": st["widths"], "maxHeight": st["max_height"],
                        "letterBand": b.letter_band},
             "panels": panels,
             "warnings": warnings,
@@ -151,7 +152,7 @@ class State:
         res = st.result
         out = {"status": st.status}
         if res is not None:
-            out.update(seconds=round(res.seconds, 3), cached=res.cached)
+            out.update(seconds=round(res.seconds, 3), cached=res.cached, lint=res.lint)
             if st.status == "error":
                 out.update(error=res.error, stdout=res.stdout[-4000:], stderr=res.stderr[-4000:])
         return out
@@ -267,7 +268,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
                     continue
                 async with state.lock:
                     try:
-                        board = Board.loads(text)
+                        board = Board.loads(text, state.pack)
                     except BoardError as e:
                         await state.broadcast({"type": "error", "name": name, "message": str(e)})
                         continue
@@ -316,7 +317,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
             raise HTTPException(409, f"board {req.name!r} exists")
         project.boards_dir.mkdir(exist_ok=True)
         async with state.lock:
-            state.save(req.name, Board.new(req.width, req.height, req.grid, req.gutter))
+            state.save(req.name, Board.new(req.width, req.height, req.grid, req.gutter, state.pack))
         return state.view(req.name)
 
     @app.get("/api/boards/{name}")
@@ -330,7 +331,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
     async def post_ops(name: str, req: Ops):
         async with state.lock:
             try:
-                board = Board.loads(state.get(name).dumps())
+                board = Board.loads(state.get(name).dumps(), state.pack)
                 warnings = apply_ops(project, board, req.ops)
             except (BoardError, PathError, KeyError, TypeError, ValueError) as e:
                 raise HTTPException(400, str(e))

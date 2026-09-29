@@ -10,7 +10,7 @@ from typing import Callable, Optional
 
 import typst
 
-from . import codegen
+from . import codegen, style as styles
 from .board import Board
 from .project import PathError, Project
 
@@ -37,12 +37,15 @@ class Renderer:
     Args:
         project: The project.
         recipe_svg: ``(board name, panel) -> SVG path`` of a recipe panel's render.
+        pack: Style pack whose font folders Typst loads; default pintu's own.
     """
 
-    def __init__(self, project: Project, recipe_svg: Optional[Callable[[str, dict], Optional[str]]] = None):
+    def __init__(self, project: Project, recipe_svg: Optional[Callable[[str, dict], Optional[str]]] = None,
+                 pack: Optional[styles.StylePack] = None):
         self.project = project
         self.recipe_svg = recipe_svg
-        self._compiler = typst.Compiler(root=str(project.root))
+        fonts = styles.typst_fonts((pack or styles.default()).font_paths)
+        self._compiler = typst.Compiler(root=str(project.root), font_paths=fonts)
         self._lock = threading.Lock()
         self._thumbs: dict[tuple[str, float], bytes] = {}
         self._write_library()

@@ -8,7 +8,8 @@ the standard library and matplotlib. Two ways to run it:
 - In a kernel: execute the source, then call ``render(request)``.
 
 Request keys: ``root``, ``recipe`` (``module.path:function``), ``params``,
-``width_mm``, ``height_mm``, ``out`` (absolute SVG path).
+``width_mm``, ``height_mm``, ``out`` (absolute SVG path), and optionally
+``fonts`` (the style pack's families) and ``font_paths`` (its font folders).
 """
 
 from __future__ import annotations
@@ -144,12 +145,67 @@ def _undrawn_ticklabels(fig) -> set[int]:
     return ids
 
 
+def _tick_labels(fig) -> set[int]:
+    """Ids of every tick label text of the figure's axes."""
+    ids = set()
+    for ax in fig.axes:
+        for axis in (ax.xaxis, ax.yaxis):
+            for tick in axis.get_major_ticks() + axis.get_minor_ticks():
+                ids.update((id(tick.label1), id(tick.label2)))
+    return ids
+
+
+def _marks(fig) -> dict:
+    """Tick lengths and widths, plotted line widths and spine widths in pt, deduplicated."""
+    lengths, widths, lines, spines = set(), set(), set(), set()
+    for ax in fig.axes:
+        if not ax.get_visible():
+            continue
+        for axis in (ax.xaxis, ax.yaxis):
+            if not axis.get_visible():
+                continue
+            for ticks in (axis.get_major_ticks()[:1], axis.get_minor_ticks()[:1]):
+                for tick in ticks:
+                    for ln in (tick.tick1line, tick.tick2line):
+                        if ln.get_visible() and ln.get_markersize() > 0:
+                            lengths.add(round(float(ln.get_markersize()), 3))
+                            widths.add(round(float(ln.get_markeredgewidth()), 3))
+        lines.update(round(float(ln.get_linewidth()), 3) for ln in ax.get_lines()
+                     if ln.get_visible() and ln.get_linestyle() not in ("None", "none", " ", ""))
+        spines.update(round(float(sp.get_linewidth()), 3) for sp in ax.spines.values() if sp.get_visible())
+    return {"tick_length_pt": sorted(lengths), "tick_width_pt": sorted(widths),
+            "line_width_pt": sorted(lines), "spine_width_pt": sorted(spines)}
+
+
+_FONT_DIRS: set[str] = set()
+
+
+def register_fonts(paths) -> None:
+    """Adds the font files in the given folders to matplotlib, once per folder."""
+    from matplotlib import font_manager
+    for d in paths or ():
+        if d in _FONT_DIRS:
+            continue
+        _FONT_DIRS.add(d)
+        for f in font_manager.findSystemFonts(fontpaths=[d]):
+            font_manager.fontManager.addfont(f)
+
+
+def fonts_found(families) -> list[str]:
+    """The given font families that matplotlib knows."""
+    from matplotlib import font_manager
+    known = {f.name for f in font_manager.fontManager.ttflist}
+    return [f for f in families or () if f in known]
+
+
 def summarize(fig) -> dict:
     """Text summary of a figure for lint and text-only models.
 
     Returns:
-        Dict with ``size_mm``, ``axes``, ``texts`` and ``overflow``; bboxes are
-        ``[x0, y0, x1, y1]`` in mm from the figure's top-left.
+        Dict with ``size_mm``, ``axes``, ``texts`` (each with ``role`` "tick" or
+        "text"), ``overflow``, ``fonts`` (fonts matplotlib set the text in) and
+        the ``_marks`` properties; bboxes are ``[x0, y0, x1, y1]`` in mm from the
+        figure's top-left.
     """
     w_in, h_in = fig.get_size_inches()
     if not hasattr(fig.canvas, "get_renderer"):
@@ -176,16 +232,20 @@ def summarize(fig) -> dict:
     texts, overflow = [], []
     from matplotlib.text import Text
     undrawn = _undrawn_ticklabels(fig)
+    ticks = _tick_labels(fig)
+    fonts = set()
     for t in fig.findobj(Text):
         if not t.get_visible() or not t.get_text().strip() or id(t) in undrawn:
             continue
         bb = _bbox_mm(t.get_window_extent(renderer), h_in, fig.dpi)
-        item = {"text": t.get_text()[:80], "fontsize_pt": round(float(t.get_fontsize()), 2), "bbox_mm": bb}
+        item = {"text": t.get_text()[:80], "fontsize_pt": round(float(t.get_fontsize()), 2), "bbox_mm": bb,
+                "role": "tick" if id(t) in ticks else "text"}
         texts.append(item)
+        fonts.add(t.get_fontname())
         if bb[0] < -0.05 or bb[1] < -0.05 or bb[2] > w_mm + 0.05 or bb[3] > h_mm + 0.05:
             overflow.append({"text": item["text"], "bbox_mm": bb})
     return {"size_mm": [round(w_mm, 3), round(h_mm, 3)], "axes": axes, "texts": texts,
-            "overflow": overflow}
+            "overflow": overflow, "fonts": sorted(fonts), **_marks(fig)}
 
 
 def _git_sha(root: str) -> str | None:
@@ -212,6 +272,7 @@ def render(req: dict) -> dict:
         import matplotlib.pyplot as plt
         from matplotlib.figure import Figure
 
+        register_fonts(req.get("font_paths"))
         fn, mod = load(req["root"], req["recipe"])
         w, h = float(req["width_mm"]), float(req["height_mm"])
         fig = fn(w, h, **(req.get("params") or {}))
@@ -222,6 +283,7 @@ def render(req: dict) -> dict:
         with matplotlib.rc_context({"svg.fonttype": "none"}):
             fig.savefig(out, format="svg")
         summary = summarize(fig)
+        summary["fonts_found"] = fonts_found(req.get("fonts"))
         plt.close(fig)
         chash = mod.__pintu_hash__
         meta = {

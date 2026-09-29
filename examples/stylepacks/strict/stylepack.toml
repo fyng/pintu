@@ -1,0 +1,83 @@
+# Example style pack with a design system's typical constraints: text 5-7 pt,
+# 5-6 pt tick labels, 0.5 mm ticks, 0.5 pt axes. The real academic-design-system
+# pack lives in that repo (formats/publication/pintu/). Schema: pintu.style.
+#
+# Use it from a project's pintu.toml:
+#   [style]
+#   pack = "../stylepacks/strict"   # a path relative to the project root
+
+[pack]
+name = "strict"
+default_preset = "nature"
+notes = [
+    "Type roles: tick labels 5 pt, axis titles 6 pt, direct labels 7 pt, notes 6 pt.",
+    "Axes, ticks and tick labels are black; no figure titles in panels.",
+]
+
+[fonts]
+family = ["IBM Plex Sans", "Arial", "DejaVu Sans"]
+# paths = ["fonts"]   # a folder of .ttf/.otf files beside this file
+size_pt = 7
+
+[letter]
+size_pt = 8
+weight = "bold"
+case = "lower"
+band_mm = 3.5
+
+[margins]   # the design system's reference-cell margins, mm
+left = 8.8
+right = 2
+top = 3.6
+bottom = 5.8
+
+[presets.nature]
+widths = { col1 = 89, col15 = 136, full = 183 }
+max_height = 170
+
+[presets.science]
+widths = { col1 = 57, col2 = 121, full = 184 }
+max_height = 230
+letter = { size_pt = 10, case = "upper" }
+
+[presets.cell]
+widths = { col1 = 85, col15 = 114, full = 174 }
+max_height = 200
+letter = { case = "upper" }
+
+[lint]
+text_pt = [5, 7]
+size_tol_mm = 0.1
+
+[[lint.rules]]
+id = "tick-labels"
+property = "tick_label_pt"
+min = 5
+max = 6
+message = "tick labels are 5 pt (6 pt for Cell Press and PNAS)"
+
+[[lint.rules]]
+id = "tick-length"
+property = "tick_length_pt"
+min = 1
+max = 3
+message = "ticks are 0.5 mm (1.4 pt) long"
+
+[[lint.rules]]
+id = "tick-width"
+property = "tick_width_pt"
+min = 0.25
+max = 1
+
+[[lint.rules]]
+id = "axis-lines"
+property = "spine_width_pt"
+min = 0.25
+max = 1
+message = "axes are 0.5 pt"
+
+[[lint.rules]]
+id = "data-lines"
+property = "line_width_pt"
+min = 0.25
+max = 2

@@ -282,7 +282,7 @@ def test_context(project):
     a, _ = make(project, [], size=(44, 55), old_size=(89, 55))
     msgs = asyncio.run(a.context("Adapt"))
     system, user = msgs[0]["content"], msgs[1]["content"]
-    assert "Style rules (Nature)" in system and "letter band" in system and "tool_call_json" not in system
+    assert "Style rules (pack 'default', preset 'nature')" in system and "All text 5-7 pt" in system and "letter band" in system and "tool_call_json" not in system
     body = user[0]["text"]
     assert "Old size: 89 x 55 mm. New size: 44 x 55 mm." in body
     assert "def boxes(w, h, n=40)" in body and 'params {"n": 40}' in body

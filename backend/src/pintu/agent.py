@@ -16,6 +16,7 @@ from typing import Callable, Optional
 
 import typst
 
+from . import lint as lints, style as styles
 from .board import Board, BoardError
 from .llm import LLM, text_protocol
 from .project import PathError, Project
@@ -26,26 +27,10 @@ from .server import apply_ops
 MAX_STEPS = 20
 MAX_IMAGES = 2  # latest renders kept in the history; the endpoint caps 8 per prompt
 IMAGE_PX = 1024
-FONT_PT = (5.0, 7.0)
-SIZE_TOL_MM = 0.1
 MAX_READ = 60_000
 MAX_GREP = 100
 SKIP_DIRS = {OUT_DIR, "__pycache__", "node_modules"}
 LOG_DIR = ".pintu/agent"
-
-STYLE_RULES = """\
-## Style rules (Nature)
-
-- Figure widths: 89 mm (1 column), 136 mm (1.5 columns), 183 mm (2 columns); height at most 170 mm.
-- The recipe draws one panel at exactly the cell size it gets (w, h in mm); the board places it.
-- All text 5-7 pt (7 pt for labels, 5-6 pt for ticks and dense annotations); sans-serif font.
-- The board draws the panel letter in a letter band above the figure; the recipe needs
-  no room for it.
-- No text may fall outside the figure.
-- No figure titles in panels; put the message in axis labels, legends or annotations.
-- Prefer direct labels over legends when there is room; drop non-essential elements
-  (titles, gridlines, secondary annotations) before shrinking text below 5 pt.
-"""
 
 SYSTEM = """\
 You are pintu's figure agent. You edit matplotlib recipes and the board layout of a
@@ -151,48 +136,13 @@ def edit_miss(text: str, old: str, cap: int = 30) -> str:
             + "\n".join(shown) + f"\n{why} Copy old_string exactly from these lines.")
 
 
-def fmt_size(w: float, h: float) -> str:
-    return f"{w:g} x {h:g} mm"
+fmt_size = lints.fmt_size
+drawn_texts = lints.drawn_texts
 
 
-_NUMBER = re.compile(r"^[−\-+]?[\d.,]+(e[−\-+]?\d+)?%?$")
-EDGE_TOL_MM = 0.3
-
-
-def drawn_texts(summary: dict) -> list[dict]:
-    """Summary texts without tick labels that matplotlib does not draw.
-
-    The summary lists tick labels outside the view limits too. A numeric label is
-    kept only if it sits beside some axes, level with its span.
-    """
-    boxes = [a["bbox_mm"] for a in summary["axes"]]
-    out = []
-    for t in summary["texts"]:
-        x0, y0, x1, y1 = t["bbox_mm"]
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-        if _NUMBER.match(t["text"].strip()) and boxes and not any(
-                (b[1] - 0.1 <= cy <= b[3] + 0.1 and (cx < b[0] or cx > b[2]))
-                or (b[0] - 0.1 <= cx <= b[2] + 0.1 and (cy > b[3] or cy < b[1])) for b in boxes):
-            continue
-        out.append(t)
-    return out
-
-
-def lint(summary: dict, w: float, h: float) -> list[str]:
-    """Lint problems of a render summary (SPEC §8) against the Nature rules."""
-    out = []
-    sw, sh = summary["size_mm"]
-    if abs(sw - w) > SIZE_TOL_MM or abs(sh - h) > SIZE_TOL_MM:
-        out.append(f"size: figure is {fmt_size(sw, sh)}, cell is {fmt_size(w, h)}")
-    lo, hi = FONT_PT
-    e = EDGE_TOL_MM
-    for t in drawn_texts(summary):
-        x0, y0, x1, y1 = t["bbox_mm"]
-        if x0 < -e or y0 < -e or x1 > sw + e or y1 > sh + e:
-            out.append(f"overflow: text {t['text']!r} at {t['bbox_mm']} falls outside the figure")
-        if not lo - 0.01 <= t["fontsize_pt"] <= hi + 0.01:
-            out.append(f"font: text {t['text']!r} is {t['fontsize_pt']:g} pt (allowed {lo:g}-{hi:g} pt)")
-    return out
+def lint(summary: dict, w: float, h: float, pack: Optional[styles.StylePack] = None) -> list[str]:
+    """Lint problems of a render summary (SPEC §8) as text lines; see ``lint.check``."""
+    return lints.lines(lints.check(summary, w, h, pack))
 
 
 def overflow(summary: dict) -> list[str]:
@@ -211,11 +161,11 @@ def compact(summary: dict) -> dict:
     return {"size_mm": summary["size_mm"], "axes": axes, "texts": texts}
 
 
-def report(res: RenderResult, w: float, h: float) -> str:
+def report(res: RenderResult, w: float, h: float, pack: Optional[styles.StylePack] = None) -> str:
     """Render outcome as text: status, lint and summary."""
     if not res.ok:
         return f"render FAILED at {fmt_size(w, h)}:\n{(res.error or '')[-3000:]}"
-    problems = lint(res.summary, w, h)
+    problems = lint(res.summary, w, h, pack)
     lines = [f"render ok at {fmt_size(w, h)} ({res.svg})",
              "lint: " + ("clean" if not problems else f"{len(problems)} problem(s)")]
     lines += [f"- {p}" for p in problems[:30]]
@@ -223,15 +173,16 @@ def report(res: RenderResult, w: float, h: float) -> str:
     return "\n".join(lines)
 
 
-def rasterize(root: Path, svg_rel: str, max_px: int = IMAGE_PX) -> bytes:
-    """PNG of a root-relative SVG, at most ``max_px`` on the long side, via typst."""
+def rasterize(root: Path, svg_rel: str, max_px: int = IMAGE_PX, pack: Optional[styles.StylePack] = None) -> bytes:
+    """PNG of a root-relative SVG, at most ``max_px`` on the long side, via typst with the pack's fonts."""
     doc = ("#set page(width: auto, height: auto, margin: 0pt, fill: white)\n"
            f'#image("/{svg_rel}")\n')
     svg = (root / svg_rel).read_text(encoding="utf-8")
     m = re.search(r'width="([\d.]+)pt"\s+height="([\d.]+)pt"', svg)
     long_in = max(float(m.group(1)), float(m.group(2))) / 72 if m else 7.0
     ppi = min(300.0, max_px / long_in)
-    out = typst.compile(input=doc.encode(), root=str(root), format="png", ppi=ppi)
+    fonts = styles.typst_fonts((pack or styles.default()).font_paths)
+    out = typst.compile(input=doc.encode(), root=str(root), format="png", ppi=ppi, font_paths=fonts)
     return out[0] if isinstance(out, list) else out
 
 
@@ -338,6 +289,7 @@ class Agent:
                  size: Optional[tuple[float, float]] = None, old_size: Optional[tuple[float, float]] = None,
                  max_steps: int = MAX_STEPS, on_event: Optional[Callable[[dict], None]] = None):
         self.project, self.board_name, self.panel_id = project, board, panel
+        self.pack = styles.for_project(project)
         self.renders, self.llm, self.max_steps, self.on_event = renders, llm, max_steps, on_event
         self.cell_size = self.panel_size(panel)
         self.size = tuple(size) if size else self.cell_size
@@ -350,7 +302,7 @@ class Agent:
     # -- board and recipe ---------------------------------------------------
 
     def board(self) -> Board:
-        return Board.load(self.project.board_path(self.board_name))
+        return Board.load(self.project.board_path(self.board_name), self.pack)
 
     def panel_size(self, pid: str) -> tuple[float, float]:
         b = self.board()
@@ -452,8 +404,8 @@ class Agent:
             res, w, h = await self.render(id, w, h)
         except BoardError as e:
             raise ToolError(str(e))
-        png = rasterize(self.project.root, res.svg) if res.ok and self.llm.profile.vision else None
-        return report(res, w, h), png
+        png = rasterize(self.project.root, res.svg, pack=self.pack) if res.ok and self.llm.profile.vision else None
+        return report(res, w, h, self.pack), png
 
     def t_get_board(self) -> str:
         b = self.board()
@@ -510,7 +462,7 @@ class Agent:
         """System and first user message: task, recipe source, sizes, lint, render, style rules."""
         recipe, params, rel = self.recipe(self.panel_id)
         res, w, h = await self.render(self.panel_id)
-        system = SYSTEM + "\n" + STYLE_RULES
+        system = SYSTEM + "\n" + styles.rules_text(self.pack, self.board().style)
         if not self.llm.profile.tools:
             system += "\n" + text_protocol(TOOLS)
         text = "\n\n".join([
@@ -520,11 +472,14 @@ class Agent:
             + f".\nOld size: {fmt_size(*self.old_size)}. New size: {fmt_size(*self.size)}."
             + f" Size on the board (below the letter band): {fmt_size(*self.cell_size)}.",
             f"## Recipe source ({rel})\n\n```python\n{self.t_read_file(rel)}\n```",
-            f"## Current render at the new size\n\n{report(res, w, h)}",
+            f"## Current render at the new size\n\n{report(res, w, h, self.pack)}",
         ])
+        fonts = styles.font_problems(self.pack, (res.summary or {}).get("fonts_found") if res.ok else None)
+        if fonts:
+            text += "\n\n## Style pack warnings\n\n" + "\n".join(f"- {f}" for f in fonts)
         content: list[dict] = [{"type": "text", "text": text}]
         if res.ok and self.llm.profile.vision:
-            content.append(image_part(rasterize(self.project.root, res.svg)))
+            content.append(image_part(rasterize(self.project.root, res.svg, pack=self.pack)))
         return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
     async def run(self, prompt: str) -> Result:

@@ -23,6 +23,16 @@ test("recipe panels re-render on resize and on save", async ({ page }) => {
   await expect(badges(page)).toHaveCount(0, { timeout: 60_000 });
   for (const id of ["km", "dumbbell", "timeline"]) expect(await href(page, id)).toContain(".svg");
 
+  // Lint: a badge on each panel whose render has lint issues, and the issues in the inspector.
+  const view = await (await page.request.get("/api/boards/recipes")).json();
+  const linted = view.panels.filter((p: { render?: { lint?: unknown[] } }) => p.render?.lint?.length);
+  await expect(page.locator('[data-testid="lint-badge"]')).toHaveCount(linted.length);
+  if (linted.length) {
+    await page.locator(`[data-panel="${linted[0].id}"] .body`).click();
+    await expect(page.locator('[data-testid="lint"] li')).toHaveCount(linted[0].render.lint.length);
+    await page.keyboard.press("Escape");
+  }
+
   // Board -> plot: resize the timeline; the old image stays, then the new size swaps in.
   const times: number[] = [];
   for (let i = 0; i < 6; i++) {

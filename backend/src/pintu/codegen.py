@@ -61,7 +61,8 @@ def generate(board: Board, exists: Callable[[str], bool], name: str = "",
         recipe_svg: The rendered SVG to show for a recipe panel, if any.
     """
     page = board.page
-    st = styles.get(board.style)
+    st = board.preset
+    pack = board.pack or styles.default()
     lt = st["letter"]
     letters = board.letters()
     bands = board.bands()
@@ -74,11 +75,15 @@ def generate(board: Board, exists: Callable[[str], bool], name: str = "",
         f"#let G = ({page.nx}, {page.ny})",
         f"#show: board-page.with(width: W, height: H, font: {fonts}, size: {_num(st['font_size_pt'])}pt)",
     ]
+    if pack.typst:
+        lines.append(pack.typst.rstrip("\n"))
     for p in board.panels:
         f, kind, label = panel_source(p, exists, recipe_svg)
         letter = letters.get(p["id"])
         if letter is not None and lt["lower"]:
             letter = letter.lower()
+        elif letter is not None and lt["upper"]:
+            letter = letter.upper()
         c = p["cell"]
         args = [
             "W", "H", "G", f"({c[0]}, {c[1]}, {c[2]}, {c[3]})",
@@ -90,5 +95,7 @@ def generate(board: Board, exists: Callable[[str], bool], name: str = "",
             f"band: {_num(bands[p['id']])}mm",
             f"letter-size: {_num(lt['size_pt'])}pt",
         ]
+        if lt["weight"] != 700:
+            args.append(f"letter-weight: {lt['weight']}")
         lines.append(f"#board-panel({', '.join(args)})")
     return "\n".join(lines) + "\n"

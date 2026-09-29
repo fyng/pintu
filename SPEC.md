@@ -310,13 +310,22 @@ def km_one(ax, cohort): ...
   (for example 1 × 5 → 2 × 3), which the user accepts or rejects.
 - **Without the SDK,** a recipe that accepts `mosaic` and `share` works the same.
 
-**Lint**, on each render:
+**Lint**, on each render and cache hit, from the worker's render summary (no
+extra render or compile):
 
-- The output size matches the render size to within 0.1 mm.
-- No text falls outside the figure.
-- Font sizes stay within the style pack's range.
+- `size`: the output size matches the render size to within `[lint] size_tol_mm`
+  (0.1 mm).
+- `overflow`: no text falls outside the figure.
+- `font`: every drawn text is within `[lint] text_pt` (5–7 pt by default), and
+  each font matplotlib set the text in is one Typst can find.
 
-Style packs may add rules.
+Style packs add rules as bounds on named render properties (`[[lint.rules]]`,
+§10): `text_pt`, `tick_label_pt`, `tick_length_pt`, `tick_width_pt`,
+`line_width_pt`, `spine_width_pt`. Each rule gives one issue per render, with the
+worst value. Issues (`{rule, message}`) reach the board API (`render.lint`), a
+lint badge on the panel and a list in the inspector, and the agent's
+`render_panel` result and context. The pack's first font missing in Typst or in
+the recipe env is a board warning and goes into the agent context.
 
 **Recipe habits** (documented, not enforced): keep module top-level code light; put
 slow loading behind `cache`.
@@ -404,11 +413,28 @@ fixed.
 
 ## 10. Style packs
 
-A style pack is a folder with `stylepack.toml`: journal presets (widths, height
-caps), letter style, font path, type sizes for lint, and an optional Typst snippet.
-pintu ships a neutral default. `academic-design-system` adds a pack under
-`formats/publication/pintu/`; its matplotlib binding (now `design.py` in OncoTraj)
-moves there as well.
+A style pack is a folder with `stylepack.toml`. The schema, documented and
+validated in `pintu/style.py` (errors name the file, table and key):
+
+| Table | Holds |
+|---|---|
+| `[pack]` | `name`, `default_preset`, optional `notes` (extra rules for the LLM) |
+| `[fonts]` | `family` (preference order), `paths` (font folders beside the file), `size_pt` |
+| `[letter]` | `size_pt`, `weight`, `case` (`lower`, `upper`, `keep`), `band_mm` |
+| `[margins]` | panel margins in mm, for helpers such as multiples (`style.margins(preset)`) |
+| `[presets.<name>]` | `widths`, `max_height`; optional `letter` and `margins` overrides |
+| `[lint]` | `text_pt = [min, max]`, `size_tol_mm`, `[[lint.rules]]` (§8) |
+| `[typst]` | `snippet`, inserted after the board's page setup |
+
+pintu ships a neutral `default` pack in the package; it holds the Nature preset
+the prototype hard-coded. `[style] pack` in `pintu.toml` picks a pack by built-in
+name or by a path relative to the project; `page.style` picks a preset in it (an
+unknown name gives the default preset). Typst compiles with the pack's font
+folders, and the recipe kernel registers them with matplotlib. The agent gets
+the pack's rules as text (§9). `examples/stylepacks/strict/` mirrors a design
+system's rules (5–6 pt tick labels, 1–3 pt ticks, 0.25–1 pt axes).
+`academic-design-system` adds its own pack under `formats/publication/pintu/`;
+its matplotlib binding (now `design.py` in OncoTraj) moves there as well.
 
 ## 11. Distribution
 
@@ -575,6 +601,12 @@ eval runs. No stack change.
     the recipe to every visible thumbnail decoded: 157–294 ms, cold thumbnails; one
     run at 2.9 s, beside the other e2e specs rendering recipes in parallel.
   - [ ] Multiples panels, groups, gallery drops into multiples cells; the exit test.
+- [x] B2 Lint and style packs (branch `b2-stylepacks`). Exit test passes with
+  `examples/stylepacks/strict/`: a recipe with 4 pt tick labels is flagged
+  (`tick-labels`, `font`), one with 4 pt tick marks (`tick-length`); a clean
+  recipe passes. Preview latency on the demo boards unchanged (median 30–39 ms
+  against 40–44 ms before, same host). The real `academic-design-system` pack
+  is pending in its own repo.
 
 **Known bugs and gaps**
 
@@ -582,7 +614,9 @@ eval runs. No stack change.
   remote backend; the built-in view is the fallback.
 - The first render after a kernel interrupt sometimes takes 2–5 s; cause unknown.
 - SVG text falls back to another font when the style pack's font is not
-  installed (IBM Plex Sans is missing on the dev host).
+  installed (IBM Plex Sans is missing on the dev host); the board now warns. The
+  default pack ships no font files.
+- The demo timeline recipe draws a 7.2 pt label, which lint flags.
 - Preview tail latency on the network filesystem reaches 362 ms; file-existence
   checks in codegen are the likely cause, not yet measured.
 - Not built: undo, typed cell entry, board rename and delete, the min/max size

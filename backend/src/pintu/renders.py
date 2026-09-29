@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from . import lint, style as styles
 from .board import Board
 from .cache import RenderCache
 from .project import Project
@@ -65,8 +66,10 @@ class Renders:
     def __init__(self, project: Project, runner: Runner, on_done: Callable[[str], Awaitable[None]],
                  save: Callable[[], None] = lambda: None):
         self.project = project
+        self.pack = styles.for_project(project)
         self.runner = runner
         self.cache = RenderCache(project)
+        self.fonts_found: Optional[list] = None  # pack fonts matplotlib found, from the latest render
         self.on_done = on_done
         self.save = save
         self.panels: dict[Key, PanelRender] = {}
@@ -126,7 +129,7 @@ class Renders:
                 continue
             hit = self.cache.get(req, h)
             if hit:
-                st.svg, st.status, st.result = hit.svg, "ok", hit
+                st.svg, st.status, st.result = hit.svg, "ok", self._lint(req, hit)
                 continue
             st.status = "rendering"
             self._queue[key] = req
@@ -142,11 +145,19 @@ class Renders:
         """Renders one request through the cache, then the runner."""
         hit = self.cache.get(req, code_hash(self.project, req.recipe))
         if hit:
-            return hit
+            return self._lint(req, hit)
         res = await self.runner.render(req)
         if res.ok:
             self.cache.put(req, res)
             self.save()
+            if "fonts_found" in (res.summary or {}):
+                self.fonts_found = res.summary["fonts_found"]
+        return self._lint(req, res)
+
+    def _lint(self, req: RenderRequest, res: RenderResult) -> RenderResult:
+        """Sets ``res.lint`` from its summary at the requested size."""
+        if res.ok:
+            res.lint = lint.check(res.summary, req.width_mm, req.height_mm, self.pack)
         return res
 
     async def _drain(self) -> None:

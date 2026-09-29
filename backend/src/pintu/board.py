@@ -50,24 +50,27 @@ class Board:
 
     Attributes:
         doc: The round-trip YAML document.
+        pack: The project's style pack; None means pintu's default pack.
     """
 
-    def __init__(self, doc: CommentedMap):
+    def __init__(self, doc: CommentedMap, pack: Optional[styles.StylePack] = None):
         self.doc = doc
+        self.pack = pack
         self.validate()
 
     @classmethod
-    def new(cls, width: float = 183, height: float = 170, grid: int = 36, gutter: float = 3) -> "Board":
-        """An empty board with the Nature full-width page."""
+    def new(cls, width: float = 183, height: float = 170, grid: int = 36, gutter: float = 3,
+            pack: Optional[styles.StylePack] = None) -> "Board":
+        """An empty board on the pack's default preset (Nature full width in the default pack)."""
         doc = CommentedMap()
         doc["version"] = VERSION
         doc["page"] = _flow_map({"width": width, "height": height, "grid": _flow([grid, grid]),
-                                 "gutter": gutter, "style": "nature"})
+                                 "gutter": gutter, "style": (pack or styles.default()).default_preset})
         doc["panels"] = CommentedSeq()
-        return cls(doc)
+        return cls(doc, pack)
 
     @classmethod
-    def loads(cls, text: str) -> "Board":
+    def loads(cls, text: str, pack: Optional[styles.StylePack] = None) -> "Board":
         """Parses board YAML."""
         try:
             doc = _yaml().load(text)
@@ -75,12 +78,12 @@ class Board:
             raise BoardError(f"invalid YAML: {e}") from e
         if not isinstance(doc, CommentedMap):
             raise BoardError("board must be a mapping")
-        return cls(doc)
+        return cls(doc, pack)
 
     @classmethod
-    def load(cls, path: Path) -> "Board":
+    def load(cls, path: Path, pack: Optional[styles.StylePack] = None) -> "Board":
         """Reads a board file."""
-        return cls.loads(Path(path).read_text(encoding="utf-8"))
+        return cls.loads(Path(path).read_text(encoding="utf-8"), pack)
 
     def dumps(self) -> str:
         """Serialises the board to YAML."""
@@ -103,6 +106,11 @@ class Board:
     def style(self) -> str:
         """The page's style name."""
         return str((self.doc.get("page") or {}).get("style", "nature"))
+
+    @property
+    def preset(self) -> dict:
+        """The style preset ``page.style`` picks in the board's pack (``style.get``)."""
+        return styles.get(self.style, self.pack)
 
     @property
     def panels(self) -> list[CommentedMap]:
@@ -133,7 +141,7 @@ class Board:
     def letter_band(self) -> float:
         """Height in mm of the letter band: ``page.letter_band`` or the style's ``band_mm``."""
         v = (self.doc.get("page") or {}).get("letter_band")
-        return float(v) if v is not None else float(styles.get(self.style)["letter"]["band_mm"])
+        return float(v) if v is not None else float(self.preset["letter"]["band_mm"])
 
     def bands(self) -> dict[str, float]:
         """Panel id to the letter band at its top: the board's band if lettered, else 0.
