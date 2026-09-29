@@ -20,7 +20,7 @@ from .board import Board, BoardError
 from .llm import LLM, text_protocol
 from .project import PathError, Project
 from .recipes import OUT_DIR, RenderRequest, RenderResult, output_path
-from .renders import Renders
+from .renders import Renders, request_for
 from .server import apply_ops
 
 MAX_STEPS = 20
@@ -372,7 +372,8 @@ class Agent:
         recipe, params, _ = self.recipe(pid)
         dw, dh = self.size if pid == self.panel_id else self.panel_size(pid)
         w, h = float(w or dw), float(h or dh)
-        res = await self.renders.render(RenderRequest(recipe, params, w, h))
+        full = request_for(self.board(), self.board().panel(pid))
+        res = await self.renders.render(RenderRequest(recipe, params, w, h, full.multiples if full else None))
         if pid == self.panel_id:
             self.last_render = res
         return res, w, h

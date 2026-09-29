@@ -12,9 +12,37 @@ export interface Panel {
   file: string | null;
   fileVersion: number | null;
   kind: "vector" | "raster" | null;
+  /** The group the panel belongs to, if any. */
+  group: string | null;
   /** Recipe panels only. */
   params?: Record<string, unknown>;
   render?: RenderStatus;
+  /** Item param of a `@multiples` recipe, else null (recipe panels only). */
+  multiplesItem?: string | null;
+  multiples?: Multiples;
+}
+
+export type ShareMode = "all" | "row" | "col" | "none";
+
+/** A multiples panel's `source.multiples`, with its cell size and any reflow on offer. */
+export interface Multiples {
+  item: string;
+  mosaic: string[][];
+  share: { x: ShareMode; y: ShareMode };
+  width_ratios?: number[];
+  height_ratios?: number[];
+  minCell: [number, number] | null;
+  cellMm: [number, number];
+  reflow: string[][] | null;
+}
+
+export interface Group {
+  id: string;
+  panels: string[];
+  cell: Cell;
+  rect: [number, number, number, number];
+  letter: string | null;
+  letterSetting: string | null;
 }
 
 export interface RenderStatus {
@@ -39,6 +67,7 @@ export interface BoardView {
   page: Page & { style: string };
   preset: { widths: Record<string, number>; maxHeight: number; letterBand: number };
   panels: Panel[];
+  groups: Group[];
   warnings: string[];
   opWarnings?: string[];
 }

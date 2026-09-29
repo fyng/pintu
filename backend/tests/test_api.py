@@ -110,3 +110,30 @@ def test_external_revert_to_earlier_text_reloads(demo):
         assert _wait_cell(c, [0, 18, 9, 36])
         path.write_text(written)  # hand-revert to the text pintu wrote
         assert _wait_cell(c, [0, 18, 6, 36])
+
+
+def test_multiples_and_group_ops(client, demo):
+    r = client.post("/api/boards/demo/ops", json={"ops": [
+        {"op": "remove", "id": "lines"}, {"op": "remove", "id": "scatter"},
+        {"op": "add", "cell": [0, 0, 18, 18], "recipe": "recipes.cohort:timeline",
+         "params": {"arm": "A", "patient": "S002", "stage": "I"}}]})
+    assert r.status_code == 200, r.text
+    p = next(q for q in r.json()["panels"] if q["id"] == "timeline-S002")
+    assert p["multiplesItem"] == "patient" and "multiples" not in p
+    five = [["S002", "S005", "S009", "S010", "S011"]]
+    r = client.post("/api/boards/demo/ops", json={"ops": [
+        {"op": "set_multiples", "id": "timeline-S002", "item": "patient"},
+        {"op": "set_multiples", "id": "timeline-S002", "mosaic": five}]})
+    assert r.status_code == 200, r.text
+    m = next(q for q in r.json()["panels"] if q["id"] == "timeline-S002")["multiples"]
+    assert m["mosaic"] == five and m["share"] == {"x": "all", "y": "all"} and m["minCell"] == [40.0, 16.0]
+    assert m["cellMm"][0] < 40 and m["reflow"] == [["S002", "S005"], ["S009", "S010"], ["S011", "."]]
+    r = client.post("/api/boards/demo/ops", json={"ops": [{"op": "group", "ids": ["bars", "heatmap"]}]})
+    v = r.json()
+    assert v["groups"][0]["panels"] == ["bars", "heatmap"] and v["groups"][0]["letter"] == "b"
+    assert [(q["group"], q["letter"]) for q in v["panels"] if q["id"] in ("bars", "heatmap")] == \
+        [("group", "b"), ("group", None)]
+    flush(client)
+    text = (demo / "boards/demo.board.yaml").read_text()
+    assert "multiples: {item: patient, mosaic: [[S002, S005, S009, S010, S011]]}" in text
+    assert "params: {arm: A, stage: I}" in text and "groups:\n  - {id: group, panels: [bars, heatmap]}" in text

@@ -96,8 +96,11 @@ panels:
 ```
 
 `source.recipe` panels render as above (edit them with the `set_recipe` op or the inspector).
-`source.multiples` is accepted and kept, and draws as a placeholder. Keys pintu does not know
-are kept as written.
+`source.multiples` (`item`, `mosaic`, `share`, ratios) makes a multiples panel: the recipe is
+called with `mosaic` and `share` (edit with the `set_multiples` op or the inspector's inner
+grid; `backend/src/pintu/multiples.py`, `frontend/src/multiples.ts`). `groups:` lists panels
+that share one letter (`group` and `ungroup` ops). Keys pintu does not know are kept as
+written.
 
 ## Tests
 

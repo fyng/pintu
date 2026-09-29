@@ -15,6 +15,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from . import geometry as geo
+from . import multiples as mult
 from . import style as styles
 
 VERSION = 1
@@ -46,7 +47,12 @@ def _flow_map(d: dict) -> CommentedMap:
 
 
 class Board:
-    """A board: page settings and panels.
+    """A board: page settings, panels and groups.
+
+    A group (``groups: [{id, panels: [...], letter?}]``) is several panels that
+    share one letter: the group is one lettered unit in reading order, placed by
+    the bounding box of its members' cells, and its members take no letter of
+    their own.
 
     Attributes:
         doc: The round-trip YAML document.
@@ -120,14 +126,56 @@ class Board:
         """Panel id to cell."""
         return {p["id"]: tuple(p["cell"]) for p in self.panels}
 
-    def letters(self) -> dict[str, Optional[str]]:
-        """Resolved panel letters."""
+    @property
+    def groups(self) -> list[CommentedMap]:
+        """The group mappings, in file order (empty if the board has none)."""
+        return self.doc.get("groups") or []
+
+    def group(self, gid: str) -> CommentedMap:
+        """The group with the given id."""
+        for g in self.groups:
+            if g["id"] == gid:
+                return g
+        raise BoardError(f"no group {gid!r}")
+
+    def group_of(self, pid: str) -> Optional[CommentedMap]:
+        """The group a panel belongs to, or None."""
+        return next((g for g in self.groups if pid in g["panels"]), None)
+
+    def group_cell(self, g: dict) -> geo.Cell:
+        """Bounding box of a group's member cells, in grid lines."""
+        cs = [self.panel(pid)["cell"] for pid in g["panels"]]
+        return (min(c[0] for c in cs), min(c[1] for c in cs), max(c[2] for c in cs), max(c[3] for c in cs))
+
+    def group_anchor(self, g: dict) -> str:
+        """The member that draws the group's letter: the leftmost of those on the group's top edge."""
+        top = self.group_cell(g)[1]
+        return min((pid for pid in g["panels"] if self.panel(pid)["cell"][1] == top),
+                   key=lambda pid: self.panel(pid)["cell"][0])
+
+    def unit_letters(self) -> dict[str, Optional[str]]:
+        """Letters of the lettered units, ungrouped panels and groups, by id."""
+        cells: dict[str, geo.Cell] = {}
         settings: dict[str, object] = {}
-        for p in self.panels:
-            if "letter" in p:
-                v = p["letter"]
-                settings[p["id"]] = None if v is None or v is False else str(v)
-        return geo.assign_letters(self.cells(), settings)
+        grouped = {pid for g in self.groups for pid in g["panels"]}
+        units = [(p["id"], tuple(p["cell"]), p) for p in self.panels if p["id"] not in grouped]
+        units += [(g["id"], self.group_cell(g), g) for g in self.groups]
+        for uid, cell, m in units:
+            cells[uid] = cell
+            if "letter" in m:
+                v = m["letter"]
+                settings[uid] = None if v is None or v is False else str(v)
+        return geo.assign_letters(cells, settings)
+
+    def letters(self) -> dict[str, Optional[str]]:
+        """Panel id to the letter drawn on it; a group's letter is drawn on its anchor member."""
+        units = self.unit_letters()
+        out = {p["id"]: units.get(p["id"]) for p in self.panels}
+        for g in self.groups:
+            for pid in g["panels"]:
+                out[pid] = None
+            out[self.group_anchor(g)] = units[g["id"]]
+        return out
 
     @property
     def letter_band(self) -> float:
@@ -138,11 +186,17 @@ class Board:
     def bands(self) -> dict[str, float]:
         """Panel id to the letter band at its top: the board's band if lettered, else 0.
 
-        The band is capped at half the cell height.
+        A lettered group's band lies along the top edge of its bounding box: the
+        members on that edge reserve it, members below it do not. The band is
+        capped at half the cell height.
         """
-        page, band, letters = self.page, self.letter_band, self.letters()
-        return {p["id"]: min(band, page.rect(p["cell"])[3] / 2) if letters[p["id"]] else 0.0
-                for p in self.panels}
+        page, band, units = self.page, self.letter_band, self.unit_letters()
+        on = {p["id"]: bool(units.get(p["id"])) for p in self.panels}
+        for g in self.groups:
+            top = self.group_cell(g)[1]
+            for pid in g["panels"]:
+                on[pid] = bool(units[g["id"]]) and self.panel(pid)["cell"][1] == top
+        return {p["id"]: min(band, page.rect(p["cell"])[3] / 2) if on[p["id"]] else 0.0 for p in self.panels}
 
     def content_rect(self, panel: dict, band: Optional[float] = None) -> tuple[float, float, float, float]:
         """(x, y, w, h) in mm of the area below a panel's letter band; a recipe renders at (w, h).
@@ -188,6 +242,30 @@ class Board:
             src = p.get("source")
             if src is not None and not isinstance(src, dict):
                 raise BoardError(f"panel {pid!r}: source must be a mapping")
+            if isinstance(src, dict) and "multiples" in src:
+                try:
+                    mult.validate(src["multiples"])
+                except mult.MosaicError as e:
+                    raise BoardError(f"panel {pid!r}: {e}") from e
+        groups = self.doc.get("groups")
+        if groups is not None and not isinstance(groups, list):
+            raise BoardError("groups must be a list")
+        panel_ids, member = set(seen), set()
+        for g in groups or []:
+            if not isinstance(g, dict) or not isinstance(g.get("id"), str) or not ID_RE.match(g["id"]):
+                raise BoardError("each group needs a valid id")
+            if g["id"] in seen:
+                raise BoardError(f"duplicate id {g['id']!r}: group ids must differ from panel and group ids")
+            seen.add(g["id"])
+            ps = g.get("panels")
+            if not isinstance(ps, list) or len(ps) < 2:
+                raise BoardError(f"group {g['id']!r}: panels must list at least 2 panel ids")
+            for pid in ps:
+                if pid not in panel_ids:
+                    raise BoardError(f"group {g['id']!r}: no panel {pid!r}")
+                if pid in member:
+                    raise BoardError(f"panel {pid!r} is in more than one group")
+                member.add(pid)
         pairs = geo.find_overlaps(self.cells())
         if pairs:
             raise BoardError("overlapping panels: " + ", ".join(f"{a}/{b}" for a, b in pairs))
@@ -195,7 +273,7 @@ class Board:
     # -- editing ---------------------------------------------------------
 
     def _fresh_id(self, base: str) -> str:
-        ids = {p["id"] for p in self.panels}
+        ids = {p["id"] for p in self.panels} | {g["id"] for g in self.groups}
         base = re.sub(r"[^A-Za-z0-9_.-]", "-", base).strip("-.") or "panel"
         if not ID_RE.match(base):
             base = "p-" + base
@@ -223,8 +301,36 @@ class Board:
         return pid
 
     def remove_panel(self, pid: str) -> None:
-        """Deletes a panel."""
+        """Deletes a panel; a group left with one member is dissolved."""
         self.panels.remove(self.panel(pid))
+        self._leave_group(pid)
+
+    def _leave_group(self, pid: str) -> None:
+        g = self.group_of(pid)
+        if g is not None:
+            g["panels"].remove(pid)
+            if len(g["panels"]) < 2:
+                self.ungroup(g["id"])
+
+    def add_group(self, ids: list[str], gid: Optional[str] = None) -> str:
+        """Groups panels under one letter; they leave any group they were in. Returns the group id."""
+        ids = list(dict.fromkeys(ids))
+        if len(ids) < 2:
+            raise BoardError("a group needs at least 2 panels")
+        for pid in ids:
+            self.panel(pid)
+            self._leave_group(pid)
+        gid = self._fresh_id(gid or "group")
+        if "groups" not in self.doc:
+            self.doc["groups"] = CommentedSeq()
+        self.doc["groups"].append(_flow_map({"id": gid, "panels": _flow(ids)}))
+        return gid
+
+    def ungroup(self, gid: str) -> None:
+        """Dissolves a group; its members take letters of their own again."""
+        self.doc["groups"].remove(self.group(gid))
+        if not self.doc["groups"]:
+            del self.doc["groups"]
 
     def set_source_file(self, pid: str, file: Optional[str]) -> None:
         """Sets a panel's static file source, or removes the source if None."""
@@ -263,9 +369,70 @@ class Board:
                 raise BoardError("params must be a mapping")
             src["params"] = _flow_map(dict(params))
 
+    def set_multiples(self, pid: str, **fields: Any) -> None:
+        """Makes a recipe panel a multiples panel, or edits its ``source.multiples``.
+
+        Args:
+            pid: Panel id.
+            **fields: ``item``, ``mosaic``, ``share``, ``width_ratios``,
+                ``height_ratios``; None removes an optional key. A new multiples
+                block without a mosaic starts from the item's param value as a
+                1 x 1 mosaic; the item param leaves ``params``. A mosaic of a new
+                shape drops the ratios not given.
+        """
+        bad = set(fields) - {"item", "mosaic", "share", "width_ratios", "height_ratios"}
+        if bad:
+            raise BoardError(f"unknown multiples keys: {', '.join(sorted(bad))}")
+        src = self.panel(pid).get("source")
+        if not isinstance(src, dict) or "recipe" not in src:
+            raise BoardError(f"panel {pid!r}: multiples need a recipe source")
+        m = src.get("multiples")
+        if not isinstance(m, dict):
+            item = fields.get("item")
+            if not item:
+                raise BoardError("a new multiples panel needs an item")
+            params = src.get("params")
+            if "mosaic" not in fields:
+                if not params or item not in params:
+                    raise BoardError(f"panel {pid!r}: no {item!r} param to start the mosaic from")
+                fields["mosaic"] = [[params[item]]]
+            if params and item in params:
+                del params[item]
+                if not params:
+                    del src["params"]
+            m = src["multiples"] = _flow_map({"item": str(item)})
+        if "mosaic" in fields:
+            try:
+                new = mult.parse(fields["mosaic"])[:2]
+                old = mult.parse(m["mosaic"])[:2] if "mosaic" in m else None
+            except mult.MosaicError as e:
+                raise BoardError(str(e)) from e
+            if old != new:
+                for k in ("width_ratios", "height_ratios"):
+                    if k not in fields:
+                        m.pop(k, None)
+            fields["mosaic"] = _flow([_flow([str(v) for v in row]) for row in fields["mosaic"]])
+        if isinstance(fields.get("share"), dict):
+            fields["share"] = _flow_map(dict(fields["share"]))
+        for k in ("width_ratios", "height_ratios"):
+            if fields.get(k) is not None:
+                fields[k] = _flow(list(fields[k]))
+        for k, v in fields.items():
+            if v is not None:
+                m[k] = v
+            elif k not in ("item", "mosaic"):
+                m.pop(k, None)
+        try:
+            mult.validate(m)
+        except mult.MosaicError as e:
+            raise BoardError(f"panel {pid!r}: {e}") from e
+
     def set_letter(self, pid: str, letter: Any) -> None:
-        """Sets a panel's letter: a string, None for no letter, "auto" to clear the override."""
-        p = self.panel(pid)
+        """Sets a unit's letter: a string, None for no letter, "auto" to clear the override.
+
+        ``pid`` is a panel or group id; a grouped panel sets its group's letter.
+        """
+        p = self.group(pid) if any(g["id"] == pid for g in self.groups) else self.group_of(pid) or self.panel(pid)
         if letter == "auto":
             p.pop("letter", None)
         elif letter is None or letter is False or letter == "":

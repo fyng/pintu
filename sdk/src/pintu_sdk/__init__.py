@@ -5,9 +5,10 @@ from __future__ import annotations
 import pickle
 from typing import Any, Callable
 
+from .multiples import choice, multiples
 from .save import save
 
-__all__ = ["cache", "cache_clear", "save"]
+__all__ = ["cache", "cache_clear", "choice", "multiples", "save"]
 
 _memo: dict = {}
 

@@ -1,4 +1,4 @@
-"""Render cache: ``(recipe, code_hash, params, w, h)`` → saved render (SPEC §8)."""
+"""Render cache: ``(recipe, code_hash, params, w, h, multiples)`` → saved render (SPEC §8)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ INDEX = ".pintu/renders.json"
 
 def cache_key(req: RenderRequest, code_hash: str) -> str:
     params = json.dumps(req.params or {}, sort_keys=True, separators=(",", ":"), default=str)
-    return f"{req.recipe}|{code_hash}|{params}|{req.width_mm:.2f}|{req.height_mm:.2f}"
+    key = f"{req.recipe}|{code_hash}|{params}|{req.width_mm:.2f}|{req.height_mm:.2f}"
+    if req.multiples:
+        key += "|" + json.dumps(req.multiples, sort_keys=True, separators=(",", ":"), default=str)
+    return key
 
 
 class RenderCache:
