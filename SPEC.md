@@ -477,8 +477,8 @@ pintu/
 
 ### 12.5 Status (2026-09-29)
 
-Branch `prototype` holds P1 and P2. P4 is committed as WIP on branch `p4`
-(worktree `../pintu-wt/p4`), not merged. No review gate yet.
+Branch `prototype` holds P1, P2 and the P4 spike (merged from `p4`). No review
+gate yet.
 
 **Prototype steps**
 
@@ -495,19 +495,26 @@ Branch `prototype` holds P1 and P2. P4 is committed as WIP on branch `p4`
   - [x] Eval on GLM-5.3-Flash (local vLLM), `tools = true`: 5 of 5 automatic
     passes.
   - [ ] Human acceptance of the 5 diffs.
-  - [ ] Eval with `tools = false`: rerun started, not finished. The first run
-    scored 0 of 5, because vLLM's glm47 parser strips `<tool_call>` text even
-    when no tools are sent. The text protocol now uses fenced `tool_call_json`
-    blocks. In the rerun, task 2 stopped at step 1 without a tool call; cause
-    unknown.
+  - [ ] Eval with `tools = false`: not finished. The first run scored 0 of 5,
+    because vLLM's glm47 parser strips `<tool_call>` text even when no tools are
+    sent; the text protocol now uses fenced `tool_call_json` blocks. In the rerun,
+    task 1 passed, task 2 stopped at step 1 on a reply that announced a call but
+    held none, and tasks 3–5 hit a stopped server (503). Fixed without a live
+    repro: text mode also takes server-parsed `tool_calls` and GLM's
+    `<arg_key>` form, and a reply with no call before any edit gets one reminder.
   - [ ] Eval on a hosted model: no endpoint yet.
-  - [ ] Merge into `prototype`; switch `render_panel` from the subprocess runner
-    to the kernel (`state.renders.render`); rerun the eval.
+  - [x] Merge into `prototype`; `render_panel` renders through the kernel
+    (`Renders.render`, the board's path); the CLI builds its own
+    (`agent.local_renders`).
+  - [ ] Rerun the eval on the kernel path, `tools = true` and `false`: the
+    endpoint was stopped.
 
 **Known bugs and gaps**
 
 - Saving a module that a recipe imports does not re-render; only the recipe's
-  own module is hashed. A kernel restart picks the change up.
+  own module is hashed. A kernel restart picks the change up. The agent's
+  `render_panel` shares this: after an edit to a helper module it gets a stale
+  render.
 - The board watcher ignores an outside write whose text matches a version pintu
   wrote recently, so hand-reverting a board file to an earlier text is ignored.
 - "Open in editor" via `$EDITOR` does nothing useful for terminal editors or a
