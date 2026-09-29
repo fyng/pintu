@@ -103,7 +103,8 @@ are kept as written.
 
 ```sh
 cd backend && uv run pytest              # geometry (incl. fig-span via typst), board, codegen, files, API,
-                                         # kernel runner, render cache, recipe watch, sdk: uv run pytest ../sdk/tests
+                                         # kernel runner, render cache, recipe watch, agent
+                                         # sdk: uv run pytest ../sdk/tests
 cd frontend && npm test                  # vitest: snapping and drop geometry
 cd frontend && npm run build && npm run e2e   # Playwright: layout edits, preview latency, recipe resize/save/open-code
 ```
@@ -113,3 +114,83 @@ when that repo sits next to this one; otherwise it checks the vendored copy only
 
 `backend/scripts/latency.py <url> <board> <panel>` measures edit → preview latency against a
 running server.
+
+## Agent
+
+`pintu/llm.py` is the model client (the `openai` SDK against any OpenAI-compatible
+`base_url`); `pintu/agent.py` is the loop, its tools, the context and the lint.
+
+Profiles live in `~/.config/pintu/llm.toml`; `PINTU_LLM_CONFIG` or `--llm-config` names
+another file, and `PINTU_LLM_PROFILE` or `--profile` picks a profile (default: the first).
+
+```toml
+[profiles.glm]
+base_url = "http://127.0.0.1:8751/v1"
+model = "glm-5.3-flash"
+api_key_env = "PINTU_GLM_KEY"   # any non-empty value if the server needs no key
+vision = true                   # send renders as PNG image parts
+tools = true                    # native tool calls; false = JSON in the text
+timeout = 1800                  # seconds per request (default)
+```
+
+The project must be a git repository with a clean tree (changes under `pintu_out/` and
+`.pintu/` do not count), so `git checkout -- .` reverts an agent run:
+
+```sh
+cd backend
+uv run pintu adapt --project P --board B --panel ID --size 178x55
+uv run pintu agent --project P --board B --panel ID "label the median line"
+```
+
+The target panel needs a `source: {recipe: "module:function", params: {...}}`. `--size`
+sets the target size (default: the cell size). `adapt` without `--size` takes the old size
+from the recipe's last render (`meta.json`). Without a server, the CLI starts its own kernel and uses the
+project's render cache (`agent.local_renders`). Both print the model's summary, the
+transcript path, the final render and the `git diff`.
+
+**Loop.** The first prompt holds the task, the recipe source, the old and new size, a render
+at the new size with its lint report and layout summary (plus the image for vision
+models), and the Nature rules. Each step calls the model once and runs its tool calls;
+the run ends when a reply has no tool call, or after `--max-steps` (default 20). Only the
+latest two images stay in the history. Tool errors go back to the model as text.
+
+| Tool | Does |
+|---|---|
+| `read_file`, `list_dir`, `grep` | Read inside the project root (`Project.resolve`) |
+| `edit_file` | Exact replacement; `old_string` must match once; refuses `.git/` and paths outside the root |
+| `render_panel(id, w?, h?)` | Renders through the board's path, `Renders.render` (cache, then the recipe kernel; default: the target size); returns lint and summary, and a PNG if `vision` |
+| `get_board`, `set_cell(id, cell)` | Read the board; move a panel through `server.apply_ops` and write the board file |
+
+With `tools = false`, the system prompt lists the tools and asks for
+`{"name": ..., "arguments": {...}}` in code fences tagged `tool_call_json` (vLLM's GLM
+tool parser strips `<tool_call>` text even without tools); the parser also takes
+`<tool_call>` blocks (JSON or GLM's `<arg_key>`/`<arg_value>` form), other fences, bare
+JSON, and any `tool_calls` the server parsed out itself. A reply without a call before
+any edit gets one reminder instead of ending the run. Results come back as a user message. Reasoning
+(`reasoning_content`, `reasoning` or `<think>` tags) is logged and never parsed for
+tool calls.
+
+**Lint** (`agent.lint`): size off the cell by more than 0.1 mm, text more than 0.3 mm
+outside the figure, text in the top-left 5 mm letter zone, font sizes outside 5–7 pt.
+Tick labels outside the view limits, which the worker summary still lists, are skipped.
+
+**Renders to PNG** go through typst-py: a page that embeds the SVG, compiled to PNG
+at most 1024 px on the long side.
+
+**Transcript.** Each run appends JSONL records to `.pintu/agent/<time>-<panel>.jsonl`:
+`start`, every `message` (images redacted), each `reply` (content, reasoning, tool calls,
+tokens, seconds), each `tool` (arguments, result, seconds) and `end`.
+
+**Eval** (P4 exit test): `scripts/agent_eval.py` runs five set tasks on the synthetic
+recipes in `tests/fixtures/agent/`, each in a fresh git repo, and writes `report.md`
+(checks, before and after renders, diffs) and `results.json`:
+
+```sh
+cd backend
+uv run python scripts/agent_eval.py --llm-config ~/.config/pintu/llm.toml --profile glm \
+    --out ../local/agent-eval/glm --parallel 2 [--tools off] [--tasks 1,3]
+```
+
+Automatic checks per task: the recipe changed, renders at the new size, has no overflow,
+still renders at the old size, adds a rule on `w`/`h` (adapt tasks) and assigns no
+literal size. Acceptance of each diff is a human call from the report.
