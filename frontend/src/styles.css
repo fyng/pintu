@@ -3,6 +3,7 @@ body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #222; }
 button { font: inherit; }
 .app { display: grid; grid-template: "h h h" auto "a m s" 1fr / 280px 1fr 380px; height: 100vh; }
 header { grid-area: h; display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #ddd; flex-wrap: wrap; }
+.app.wide-aside { grid-template-columns: 440px 1fr 380px; }
 aside { grid-area: a; overflow: auto; border-right: 1px solid #ddd; }
 main { grid-area: m; overflow: auto; background: #eef0f2; }
 .side { grid-area: s; overflow: auto; border-left: 1px solid #ddd; display: flex; flex-direction: column; }
@@ -63,6 +64,9 @@ line.fine { stroke: #d5dde8; stroke-width: 0.12; }
 .badge-error rect { fill: #c0392b; }
 .badge-missing rect { fill: #d68910; }
 .badge-lint rect { fill: #b9770e; }
+.badge-size rect { fill: #8a94a6; }
+.badge-outside { pointer-events: all; cursor: pointer; }
+.badge-outside rect { fill: #c0392b; }
 .lint { color: #9a5b00; font-size: 11px; margin: 4px 0; padding-left: 16px; max-height: 12em; overflow: auto; }
 .recipe textarea { width: 100%; font-family: monospace; font-size: 12px; }
 .recipe input { width: 100%; font-family: monospace; }
@@ -90,3 +94,47 @@ line.fine { stroke: #d5dde8; stroke-width: 0.12; }
 .thumb.dragging { opacity: 0.5; }
 .thumb img { display: block; width: 100%; aspect-ratio: 3 / 2; object-fit: contain; background: #fff; }
 .thumb figcaption { font-size: 11px; padding: 1px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #444; }
+
+.chat { padding: 6px; font-size: 12px; }
+.chat .row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.chat h3 { margin: 4px 0; font-size: 13px; }
+.chat pre { white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; background: #f6f6f6; padding: 4px; margin: 2px 0; font-size: 11px; }
+.chat code { font-size: 11px; }
+.prompt-box { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.prompt-box textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.inline { display: inline-flex; gap: 3px; align-items: center; }
+.sessions { list-style: none; margin: 0; padding: 0; }
+.sessions ul { list-style: none; margin: 0; padding: 0; }
+.session-row { border-bottom: 1px solid #eee; padding: 4px 2px; cursor: pointer; }
+.session-row:hover { background: #f3f6fb; }
+.session-row.child { padding-left: 16px; }
+.session-row .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kind { font-size: 10px; color: #fff; background: #8a94a6; border-radius: 3px; padding: 0 4px; }
+.st { font-size: 10px; border-radius: 3px; padding: 0 4px; background: #e5e5e5; }
+.st-busy, .st-running { background: #d6e4fa; color: #1f5fbf; }
+.st-retry, .st-pending { background: #fbe9c8; color: #8a5a00; }
+.st-error { background: #f6d5d1; color: #a93226; }
+.st-done { background: #d5efdc; color: #1e7b3a; }
+.turn { border-top: 1px solid #ddd; margin-top: 6px; padding-top: 4px; }
+.turn-reverted { opacity: 0.6; }
+.msg { white-space: pre-wrap; word-break: break-word; margin: 3px 0; max-height: 200px; overflow: auto; }
+.msg-user { background: #eef3fb; padding: 4px; border-radius: 4px; }
+.reasoning, .tool { margin: 2px 0; }
+.reasoning summary, .tool summary { cursor: pointer; color: #555; }
+.conflicts { border: 1px solid #d68910; background: #fdf4e3; padding: 4px; margin: 4px 0; }
+.chat .trace { max-height: none; }
+.diff { margin: 3px 0; border: 1px solid #ddd; }
+.diff summary { cursor: pointer; padding: 2px 4px; background: #f3f3f3; }
+.diff table { border-collapse: collapse; width: 100%; font-family: monospace; font-size: 11px; }
+.diff .ln { color: #999; text-align: right; padding: 0 3px; width: 1%; user-select: none; }
+.diff .code { white-space: pre-wrap; word-break: break-all; }
+.dl-add { background: #e6f6ea; }
+.dl-del { background: #fbe9e7; }
+.dl-hunk { color: #6a4ca5; background: #f4f0fa; }
+.diff-add { color: #1e7b3a; }
+.diff-del { color: #a93226; }
+.file-added, .file-modified, .file-deleted { font-size: 10px; text-transform: uppercase; color: #666; }
+.gallery-pick { border: 1px solid #ddd; padding: 4px; margin: 4px 0; font-size: 12px; }
+.gallery-pick .row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.thumb.picked { outline: 2px solid #1f5fbf; }
+button.link { border: 0; background: none; color: #1f5fbf; cursor: pointer; padding: 0; }

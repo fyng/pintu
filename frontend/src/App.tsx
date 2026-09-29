@@ -2,12 +2,14 @@ import { DndContext, DragOverlay, PointerSensor, pointerWithin, rectIntersection
 import { useEffect, useState } from "react";
 import { api, type Panel } from "./api";
 import { Canvas, canvasCoords } from "./components/Canvas";
+import { Chat } from "./components/Chat";
 import { FileBrowser } from "./components/FileBrowser";
 import { Gallery } from "./components/Gallery";
 import { Inspector } from "./components/Inspector";
 import { Preview } from "./components/Preview";
 import { dropCell, pitch, rect } from "./geometry";
 import { append, move, place, span } from "./multiples";
+import { useSessions } from "./sessions";
 import { connect, useStore } from "./store";
 
 /** The droppable under the pointer, so small inner-grid cells take drops precisely. */
@@ -28,7 +30,9 @@ export function App() {
   const load = useStore((s) => s.load);
   const commit = useStore((s) => s.commit);
   const [dragging, setDragging] = useState<string | null>(null);
-  const [tab, setTab] = useState<"files" | "gallery">("gallery");
+  const tab = useSessions((s) => s.tab);
+  const setTab = useSessions((s) => s.setTab);
+  const running = useSessions((s) => Object.values(s.sessions).filter((x) => x.status.type !== "idle").length);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   useEffect(() => {
@@ -109,7 +113,7 @@ export function App() {
   return (
     <DndContext sensors={sensors} collisionDetection={collision} onDragStart={(e) => setDragging(String(e.active.data.current?.label ?? e.active.data.current?.path))} onDragEnd={onDragEnd}
       onDragCancel={() => setDragging(null)}>
-      <div className="app">
+      <div className={`app ${tab === "chat" ? "wide-aside" : ""}`}>
         <header>
           <strong>pintu</strong>
           <select value={board?.name ?? ""} onChange={(e) => load(e.target.value)}>
@@ -123,8 +127,11 @@ export function App() {
           <div className="tabs">
             <button className={tab === "gallery" ? "on" : ""} onClick={() => setTab("gallery")}>Gallery</button>
             <button className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>Files</button>
+            <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")} data-testid="tab-chat">
+              Agent{running ? ` (${running})` : ""}
+            </button>
           </div>
-          {tab === "gallery" ? <Gallery /> : <FileBrowser />}
+          {tab === "gallery" ? <Gallery /> : tab === "files" ? <FileBrowser /> : <Chat />}
         </aside>
         <main>{board ? <Canvas /> : <p>No board. Create one.</p>}</main>
         <section className="side">

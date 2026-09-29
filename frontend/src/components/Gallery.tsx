@@ -2,21 +2,24 @@ import { useDraggable } from "@dnd-kit/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { galleryQuery, itemLabel, parseValues, toggleValue, type Facet, type Filters, type GalleryItem, type GalleryPage, type Group } from "../gallery";
+import { sessionsApi, useSessions, type PromoteSource } from "../sessions";
 import { useStore } from "../store";
 
 const PAGE = 60;
 /** Facets with at most this many values show as chips; larger ones take typed values. */
 const CHIPS = 12;
 
-function Thumb({ item }: { item: GalleryItem }) {
+function Thumb({ item, picked, onPick }: { item: GalleryItem; picked: boolean; onPick: () => void }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `gallery:${item.path}`,
     data: { path: item.path, recipe: item.recipe, params: item.params, label: itemLabel(item) },
   });
   const size = item.width_mm && item.height_mm ? ` · ${item.width_mm.toFixed(0)} × ${item.height_mm.toFixed(0)} mm` : "";
   return (
-    <figure ref={setNodeRef} {...listeners} {...attributes} className={`thumb ${isDragging ? "dragging" : ""} ${item.recipe ? "linked" : ""}`}
-      title={`${item.path}${size}${item.recipe ? `\n${item.recipe}` : ""}\nDrag onto the board`} data-testid="gallery-item">
+    <figure ref={setNodeRef} {...listeners} {...attributes} onClick={onPick}
+      className={`thumb ${isDragging ? "dragging" : ""} ${item.recipe ? "linked" : ""} ${picked ? "picked" : ""}`}
+      title={`${item.path}${size}${item.recipe ? `\n${item.recipe}` : ""}\nDrag onto the board; click for Promote to recipe`}
+      data-testid="gallery-item" data-path={item.path}>
       <img src={api.galleryThumbUrl(item.path, item.version)} loading="lazy" alt="" draggable={false} />
       <figcaption>{itemLabel(item)}</figcaption>
     </figure>
@@ -61,6 +64,7 @@ export function Gallery() {
   const [facets, setFacets] = useState<Record<string, Facet[]>>({});
   const [page, setPage] = useState<GalleryPage | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
   const loading = useRef(false);
   const sentinel = useRef<HTMLDivElement>(null);
 
@@ -123,13 +127,41 @@ export function Gallery() {
       ))}
       {error && <div className="error">{error}</div>}
       {page && <div className="meta">{page.total} items</div>}
+      {picked && <Pick path={picked} onClose={() => setPicked(null)} />}
       {sections.map((s, i) => (
         <section key={`${s.recipe}-${i}`}>
           <h4>{s.recipe ?? "Unlinked files"}</h4>
-          <div className="thumbs">{s.items.map((it) => <Thumb key={it.path} item={it} />)}</div>
+          <div className="thumbs">{s.items.map((it) => (
+            <Thumb key={it.path} item={it} picked={it.path === picked} onPick={() => setPicked(it.path === picked ? null : it.path)} />
+          ))}</div>
         </section>
       ))}
       <div ref={sentinel} />
+    </div>
+  );
+}
+
+/** The clicked gallery item: "Promote to recipe" when its script is known. */
+function Pick({ path, onClose }: { path: string; onClose: () => void }) {
+  const [src, setSrc] = useState<PromoteSource | null>(null);
+  const [why, setWhy] = useState<string | null>(null);
+  const llm = useSessions((s) => s.llm);
+  useEffect(() => {
+    setSrc(null);
+    setWhy(null);
+    sessionsApi.promoteSource(path).then(setSrc, (e) => setWhy(e.message));
+  }, [path]);
+  const board = useStore((s) => s.board?.name ?? null);
+  return (
+    <div className="gallery-pick" data-testid="gallery-pick">
+      <div className="row"><b>{path}</b><button className="link" onClick={onClose}>close</button></div>
+      {src ? (
+        <div className="row">
+          <span className="meta">script {src.script} → {src.suggestedRecipe}</span>
+          <button data-testid="promote" disabled={llm?.configured === false}
+            onClick={() => useSessions.getState().create({ kind: "promote", path, board })}>Promote to recipe</button>
+        </div>
+      ) : why && <div className="meta" data-testid="promote-unknown">Cannot promote: {why}</div>}
     </div>
   );
 }
