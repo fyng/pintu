@@ -495,7 +495,10 @@ gate yet.
     `pintu agent` and `pintu adapt` commands, eval harness with 5 tasks.
   - [x] Eval on GLM-5.3-Flash (local vLLM), `tools = true`: 5 of 5 automatic
     passes.
-  - [ ] Human acceptance of the 5 diffs.
+  - [x] Human acceptance of the 5 diffs: 4 of 5 accepted as is (tasks 1–4);
+    task 5 accepted only without its ad hoc y-limit block. Tasks 2, 4 and 5 each
+    added their own letter-zone clearance; it belongs in the shared panel
+    helper or pintu's panel margins. Tasks took 2–25 min each.
   - [ ] Eval with `tools = false`: not finished. The first run scored 0 of 5,
     because vLLM's glm47 parser strips `<tool_call>` text even when no tools are
     sent; the text protocol now uses fenced `tool_call_json` blocks. In the rerun,
