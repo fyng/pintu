@@ -169,6 +169,14 @@ Edges snap to lines.
 or clear any letter. A multiples panel takes one letter; a *group* (several panels
 drawn by different functions) takes one letter on the group and none on its members.
 
+**Letter band.** A lettered panel reserves a full-width band at its top, and the
+letter sits in it. The source fills the area below: a recipe renders at
+`(w, h − band)`, a static file is fitted into it. A panel without a letter gets the
+whole cell. The band is 3.5 mm by default (an 8 pt letter, 2.8 mm, plus a pad), set
+by the style pack (`letter.band_mm`) or per board (`page.letter_band`), and at most
+half the cell height. On a group, the band sits on the group (groups are not built
+yet).
+
 ## 7. Files and sync
 
 A project is any folder. pintu adds:
@@ -190,7 +198,7 @@ Recipes live wherever the user's code lives. The board names them by
 
 ```yaml
 version: 1
-page: {width: 183, height: 170, grid: [36, 36], gutter: 3, style: nature}
+page: {width: 183, height: 170, grid: [36, 36], gutter: 3, style: nature}   # optional: letter_band (mm)
 panels:
   - id: km
     cell: [0, 0, 36, 6]
@@ -223,8 +231,8 @@ outputs by recipe and filters them by parameter (for example, 300 patients down 
 
 ## 8. Recipes
 
-**Contract.** A recipe is a function that takes the cell size in mm and returns a
-matplotlib `Figure` of that size:
+**Contract.** A recipe is a function that takes its render size in mm (the cell below
+its letter band, §6) and returns a matplotlib `Figure` of that size:
 
 ```python
 def timeline(w: float, h: float, patient: str) -> Figure: ...
@@ -286,9 +294,8 @@ def km_one(ax, cohort): ...
 
 **Lint**, on each render:
 
-- The output size matches the cell to within 0.1 mm.
-- No text falls outside the page.
-- Nothing enters the letter zone.
+- The output size matches the render size to within 0.1 mm.
+- No text falls outside the figure.
 - Font sizes stay within the style pack's range.
 
 Style packs may add rules.
@@ -532,6 +539,10 @@ eval runs. No stack change.
     and how it differs, a multiple match lists its lines. Rerun: tools 5 of 5
     (4–17 steps), text 5 of 5 (3–11 steps), all stopped "done". Neither new
     message appears in the rerun transcripts, so the pass does not prove them.
+
+- [x] Letter band (§6): a lettered panel renders its source below a 3.5 mm band,
+  so recipes need no letter-zone clearance; the letter-zone lint and prompt rule
+  are gone. Preview median 25 ms, max 57 ms on the demo boards.
 
 **Known bugs and gaps**
 

@@ -43,11 +43,11 @@ class PanelRender:
 
 
 def request_for(board: Board, panel: dict) -> Optional[RenderRequest]:
-    """The render a recipe panel needs at its cell size, or None for other panels."""
+    """The render a recipe panel needs below its letter band, or None for other panels."""
     src = panel.get("source") or {}
     if "recipe" not in src:
         return None
-    _, _, w, h = board.page.rect(panel["cell"])
+    _, _, w, h = board.content_rect(panel)
     params = json.loads(json.dumps(src.get("params") or {}, default=str))
     return RenderRequest(str(src["recipe"]), params, round(w, 2), round(h, 2))
 

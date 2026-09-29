@@ -18,7 +18,7 @@ def _agent_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--project", default=".", help="project folder, a clean git tree (default: .)")
     ap.add_argument("--board", required=True, help="board name")
     ap.add_argument("--panel", required=True, help="panel id with a recipe source")
-    ap.add_argument("--size", type=_size, help="target size WxH in mm (default: the cell size)")
+    ap.add_argument("--size", type=_size, help="target size WxH in mm (default: the cell size below the letter band)")
     ap.add_argument("--profile", help="profile in llm.toml (default: $PINTU_LLM_PROFILE or the first)")
     ap.add_argument("--llm-config", help="llm.toml path (default: $PINTU_LLM_CONFIG or ~/.config/pintu/llm.toml)")
     ap.add_argument("--max-steps", type=int, default=20)

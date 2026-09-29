@@ -72,7 +72,6 @@ export function Canvas() {
     }
   };
 
-  const zone = board.preset.letterZone;
   const vline = (i: number, cls: string) => {
     const x = i === nx ? page.width : lineAt(page.width, nx, page.gutter, i) - (i ? page.gutter / 2 : 0);
     return <line key={`v${cls}${i}`} className={cls} x1={x} x2={x} y1={0} y2={page.height} />;
@@ -105,7 +104,7 @@ export function Canvas() {
           const cls = ["panel", p.id === selected && "selected", drag?.id === p.id && (drag.ok ? "dragging" : "invalid")]
             .filter(Boolean)
             .join(" ");
-          const top = p.kind === "raster" ? zone : 0;
+          const top = p.letter ? Math.min(board.preset.letterBand, h / 2) : 0;
           return (
             <g key={p.id} className={cls} data-panel={p.id}>
               <svg x={x} y={y} width={w} height={h} overflow="hidden">
@@ -113,7 +112,7 @@ export function Canvas() {
                 {p.file ? (
                   <image href={api.thumbUrl(p.file, p.fileVersion)} y={top} width={w} height={Math.max(0, h - top)} preserveAspectRatio="xMidYMid meet" />
                 ) : (
-                  <text className="placeholder" x={zone + 0.5} y={4}>
+                  <text className="placeholder" x={1} y={top + 3}>
                     {p.source.recipe ? `recipe ${p.source.recipe}` : p.source.file ? `missing ${p.source.file}` : p.id}
                   </text>
                 )}

@@ -24,7 +24,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MM = 25.4
-LETTER_ZONE_MM = 5.0
 MARKER = "PINTU_RESULT "
 
 
@@ -186,7 +185,7 @@ def summarize(fig) -> dict:
         if bb[0] < -0.05 or bb[1] < -0.05 or bb[2] > w_mm + 0.05 or bb[3] > h_mm + 0.05:
             overflow.append({"text": item["text"], "bbox_mm": bb})
     return {"size_mm": [round(w_mm, 3), round(h_mm, 3)], "axes": axes, "texts": texts,
-            "overflow": overflow, "letter_zone_mm": LETTER_ZONE_MM}
+            "overflow": overflow}
 
 
 def _git_sha(root: str) -> str | None:

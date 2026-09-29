@@ -15,6 +15,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from . import geometry as geo
+from . import style as styles
 
 VERSION = 1
 ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
@@ -128,6 +129,33 @@ class Board:
                 settings[p["id"]] = None if v is None or v is False else str(v)
         return geo.assign_letters(self.cells(), settings)
 
+    @property
+    def letter_band(self) -> float:
+        """Height in mm of the letter band: ``page.letter_band`` or the style's ``band_mm``."""
+        v = (self.doc.get("page") or {}).get("letter_band")
+        return float(v) if v is not None else float(styles.get(self.style)["letter"]["band_mm"])
+
+    def bands(self) -> dict[str, float]:
+        """Panel id to the letter band at its top: the board's band if lettered, else 0.
+
+        The band is capped at half the cell height.
+        """
+        page, band, letters = self.page, self.letter_band, self.letters()
+        return {p["id"]: min(band, page.rect(p["cell"])[3] / 2) if letters[p["id"]] else 0.0
+                for p in self.panels}
+
+    def content_rect(self, panel: dict, band: Optional[float] = None) -> tuple[float, float, float, float]:
+        """(x, y, w, h) in mm of the area below a panel's letter band; a recipe renders at (w, h).
+
+        Args:
+            panel: The panel mapping.
+            band: The panel's band, if already known; otherwise computed.
+        """
+        if band is None:
+            band = self.bands()[panel["id"]]
+        x, y, w, h = self.page.rect(panel["cell"])
+        return x, y + band, w, h - band
+
     def validate(self) -> None:
         """Checks the schema, cell bounds and overlaps.
 
@@ -139,6 +167,9 @@ class Board:
         page = self.page
         if page.width <= 0 or page.height <= 0 or page.nx < 1 or page.ny < 1 or page.gutter < 0:
             raise BoardError("invalid page")
+        band = (self.doc.get("page") or {}).get("letter_band")
+        if band is not None and (isinstance(band, bool) or not isinstance(band, (int, float)) or band < 0):
+            raise BoardError("page letter_band must be a number >= 0")
         seen = set()
         for p in self.panels:
             if not isinstance(p, dict) or "id" not in p or "cell" not in p:
@@ -262,7 +293,7 @@ class Board:
         return ids, exact
 
     def set_page(self, **kw: Any) -> None:
-        """Updates page keys (width, height, grid, gutter, style)."""
+        """Updates page keys (width, height, grid, gutter, style, letter_band)."""
         page = self.doc.setdefault("page", _flow_map({}))
         for k, v in kw.items():
             if k == "grid" and isinstance(v, (list, tuple)):

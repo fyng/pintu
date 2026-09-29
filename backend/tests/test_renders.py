@@ -99,13 +99,14 @@ def test_board_resize_watch_missing_and_open(project, tmp_path, monkeypatch):
     with TestClient(create_app(project, runner=runner)) as client:
         b = wait_for(client, lambda b: panel(b)["render"]["status"] == "ok")
         p = panel(b)
-        assert p["file"].endswith("/88.5x43.5.svg") and p["params"] == {"label": "hi"}
+        assert p["file"].endswith("/88.5x40.svg") and p["params"] == {"label": "hi"}
         assert client.get("/api/boards/b/preview.svg").status_code == 200
 
+        # The recipe renders below the 3.5 mm letter band.
         # Board -> plot: resize renders at the new size; the old render shows meanwhile.
         r = client.post("/api/boards/b/ops", json={"ops": [{"op": "set_cell", "id": "r", "cell": [0, 0, 12, 18]}]})
         assert panel(r.json())["file"] == p["file"]
-        b = wait_for(client, lambda b: panel(b)["file"].endswith("/58x43.5.svg"))
+        b = wait_for(client, lambda b: panel(b)["file"].endswith("/58x40.svg"))
         # Back to the first size: a cache hit, no render.
         n = len(runner.calls)
         r = client.post("/api/boards/b/ops", json={"ops": [{"op": "set_cell", "id": "r", "cell": [0, 0, 18, 18]}]})
@@ -174,3 +175,20 @@ def test_sync_queues_and_rerenders_deleted_output(project, tmp_path):
         finally:
             await rs.stop()
     asyncio.run(main())
+
+
+def test_request_for_uses_size_below_band():
+    from pintu.board import Board
+    from pintu.renders import request_for
+    b = Board.loads("""\
+page: {width: 183, height: 173, grid: 36, gutter: 3}
+panels:
+  - {id: a, cell: [0, 0, 18, 18], source: {recipe: "m:f"}}
+  - {id: b, cell: [18, 0, 36, 18], letter: false, source: {recipe: "m:f"}}
+  - {id: c, cell: [0, 18, 36, 36], source: {file: x.pdf}}
+""")
+    _, _, w, h = b.page.rect([0, 0, 18, 18])
+    a, bb = request_for(b, b.panel("a")), request_for(b, b.panel("b"))
+    assert (a.width_mm, a.height_mm) == (round(w, 2), round(h - 3.5, 2))
+    assert (bb.width_mm, bb.height_mm) == (round(w, 2), round(h, 2))
+    assert request_for(b, b.panel("c")) is None
