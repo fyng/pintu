@@ -131,18 +131,18 @@ class State:
         self.writer.submit(self.renderer.write, name, src)
 
 
-def _check_file(state: State, rel: Optional[str]) -> Optional[str]:
+def _check_file(project: Project, rel: Optional[str]) -> Optional[str]:
     if rel is None:
         return None
-    path = state.project.resolve(rel)
+    path = project.resolve(rel)
     if not path.is_file():
         raise BoardError(f"not a file: {rel}")
     if path.suffix.lower() not in IMAGE_KINDS:
         raise BoardError(f"unsupported file type: {rel}")
-    return state.project.relative(path)
+    return project.relative(path)
 
 
-def apply_ops(state: State, board: Board, ops: list[dict]) -> list[str]:
+def apply_ops(project: Project, board: Board, ops: list[dict]) -> list[str]:
     """Applies edits to a board in place. Returns warnings.
 
     Raises:
@@ -154,11 +154,11 @@ def apply_ops(state: State, board: Board, ops: list[dict]) -> list[str]:
         if kind == "set_cell":
             board.set_cell(op["id"], op["cell"])
         elif kind == "add":
-            board.add_panel(op["cell"], _check_file(state, op.get("file")), op.get("id"))
+            board.add_panel(op["cell"], _check_file(project, op.get("file")), op.get("id"))
         elif kind == "remove":
             board.remove_panel(op["id"])
         elif kind == "set_source":
-            board.set_source_file(op["id"], _check_file(state, op.get("file")))
+            board.set_source_file(op["id"], _check_file(project, op.get("file")))
         elif kind == "set_letter":
             board.set_letter(op["id"], op.get("letter"))
         elif kind == "split":
@@ -249,7 +249,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True) -> FastA
         async with state.lock:
             try:
                 board = Board.loads(state.get(name).dumps())
-                warnings = apply_ops(state, board, req.ops)
+                warnings = apply_ops(project, board, req.ops)
             except (BoardError, PathError, KeyError, TypeError, ValueError) as e:
                 raise HTTPException(400, str(e))
             state.save(name, board)
