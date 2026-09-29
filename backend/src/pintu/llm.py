@@ -19,6 +19,7 @@ else:
 CONFIG = Path("~/.config/pintu/llm.toml")
 CONFIG_ENV = "PINTU_LLM_CONFIG"
 PROFILE_ENV = "PINTU_LLM_PROFILE"
+COPILOT_API = "https://api.githubcopilot.com"
 
 TEXT_PROTOCOL = """\
 ## Calling tools
@@ -54,6 +55,11 @@ class Profile:
         vision: Whether the model accepts image content parts.
         tools: Native tool calling; False uses JSON in the text.
         timeout: Seconds per request.
+        provider: ``openai`` (any OpenAI-compatible server) or ``copilot`` (GitHub
+            Copilot; auth from ``pintu login copilot``).
+        token_exchange: Copilot only: send a short-lived Copilot token instead of the
+            GitHub token.
+        headers: Extra HTTP headers sent with every request.
     """
 
     name: str
@@ -63,6 +69,9 @@ class Profile:
     vision: bool = False
     tools: bool = True
     timeout: float = 1800.0
+    provider: str = "openai"
+    token_exchange: bool = False
+    headers: dict = field(default_factory=dict)
 
 
 def load_profile(name: Optional[str] = None, path: Optional[str | Path] = None) -> Profile:
@@ -87,8 +96,14 @@ def load_profile(name: Optional[str] = None, path: Optional[str | Path] = None) 
     if name not in profiles:
         raise LLMError(f"no profile {name!r} in {path}; have {', '.join(profiles)}")
     p = profiles[name]
-    known = {k: p[k] for k in ("api_key_env", "vision", "tools", "timeout") if k in p}
-    return Profile(name=name, base_url=p["base_url"], model=p["model"], **known)
+    known = {k: p[k] for k in ("api_key_env", "vision", "tools", "timeout", "provider", "token_exchange", "headers")
+             if k in p}
+    if known.get("provider", "openai") not in ("openai", "copilot"):
+        raise LLMError(f"profile {name!r}: provider must be 'openai' or 'copilot'")
+    base_url = p.get("base_url") or (COPILOT_API if known.get("provider") == "copilot" else None)
+    if not base_url:
+        raise LLMError(f"profile {name!r} has no base_url")
+    return Profile(name=name, base_url=base_url, model=p["model"], **known)
 
 
 @dataclass
@@ -273,13 +288,34 @@ class LLM:
         client: An ``openai.AsyncOpenAI``-like object; built from the profile if None.
     """
 
-    def __init__(self, profile: Profile, client: Any = None):
+    def __init__(self, profile: Profile, client: Any = None, auth: Any = None):
         self.profile = profile
+        self.auth = auth
+        if profile.provider == "copilot" and auth is None:
+            from .copilot import CopilotAuth
+            self.auth = CopilotAuth(exchange=profile.token_exchange)
         if client is None:
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(base_url=profile.base_url, timeout=profile.timeout, max_retries=1,
-                                 api_key=os.environ.get(profile.api_key_env) or "none")
+            # Copilot rate-limits with 429 and Retry-After; the SDK waits and retries.
+            client = AsyncOpenAI(base_url=profile.base_url, timeout=profile.timeout,
+                                 max_retries=4 if self.auth else 1, default_headers=profile.headers or None,
+                                 api_key="copilot" if self.auth else os.environ.get(profile.api_key_env) or "none")
         self.client = client
+
+    async def _create(self, kw: dict) -> Any:
+        """One request; Copilot requests get fresh auth headers and one retry after a 401."""
+        if self.auth is None:
+            return await self.client.chat.completions.create(**kw)
+        from .copilot import redact
+        for attempt in (0, 1):
+            kw["extra_headers"] = await self.auth.aheaders(kw["messages"])
+            try:
+                return await self.client.chat.completions.create(**kw)
+            except Exception as e:
+                if attempt == 0 and getattr(e, "status_code", None) == 401 and self.auth.refresh():
+                    continue
+                hint = "; run: pintu login copilot" if getattr(e, "status_code", None) == 401 else ""
+                raise LLMError(redact(f"Copilot request failed: {type(e).__name__}: {e}{hint}")) from None
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> Reply:
         """Sends the history; returns the parsed reply.
@@ -290,13 +326,19 @@ class LLM:
         if self.profile.tools and tools:
             kw["tools"] = tools
         t0 = time.perf_counter()
-        resp = await self.client.chat.completions.create(**kw)
+        resp = await self._create(kw)
         seconds = time.perf_counter() - t0
         if not resp.choices:
             raise LLMError("model returned no choices")
         msg = resp.choices[0].message
-        reasoning = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
+        reasoning = (getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
+                     or getattr(msg, "reasoning_text", None))  # Copilot: reasoning_text
+        opaque = getattr(msg, "reasoning_opaque", None)
         content = msg.content or ""
+        raw_calls = list(getattr(msg, "tool_calls", None) or [])
+        for extra in resp.choices[1:]:  # Copilot may split text and tool calls across choices
+            content = "\n\n".join(t for t in (content, extra.message.content or "") if t)
+            raw_calls += getattr(extra.message, "tool_calls", None) or []
         if "</think>" in content:  # reasoning inlined in the content
             head, _, content = content.rpartition("</think>")
             reasoning = reasoning or head.replace("<think>", "").strip()
@@ -306,7 +348,7 @@ class LLM:
             u = resp.usage
             usage = {"prompt": u.prompt_tokens, "completion": u.completion_tokens, "total": u.total_tokens}
         calls = []
-        for tc in getattr(msg, "tool_calls", None) or []:  # text mode too: vLLM may parse them out
+        for tc in raw_calls:  # text mode too: vLLM may parse them out
             args, err = _args(tc.function.arguments)
             calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args, error=err))
         if self.profile.tools:
@@ -315,6 +357,8 @@ class LLM:
                 message["tool_calls"] = [
                     {"id": c.id, "type": "function",
                      "function": {"name": c.name, "arguments": json.dumps(c.arguments)}} for c in calls]
+            if opaque:  # Copilot: echo encrypted reasoning so the next turn keeps it
+                message.update(reasoning_text=reasoning, reasoning_opaque=opaque)
         else:
             if calls:  # show the server-parsed calls in the protocol's own form
                 content = "\n\n".join([content] + [

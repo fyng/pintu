@@ -194,3 +194,77 @@ uv run python scripts/agent_eval.py --llm-config ~/.config/pintu/llm.toml --prof
 Automatic checks per task: the recipe changed, renders at the new size, has no overflow,
 still renders at the old size, adds a rule on `w`/`h` (adapt tasks) and assigns no
 literal size. Acceptance of each diff is a human call from the report.
+
+### GitHub Copilot
+
+`pintu/copilot.py` makes the user's own Copilot subscription (Pro, Pro+, Business or
+Enterprise) a Chat Completions endpoint. The agent still talks through the `openai` SDK;
+only the headers change per request. Endpoints and headers follow opencode's Copilot
+provider (MIT).
+
+1. Register a GitHub OAuth app (GitHub, Settings, Developer settings, OAuth Apps, New;
+   any homepage and callback URL) and tick **Enable Device Flow**. Its client id is
+   public; no secret is needed. pintu ships no client id of its own.
+2. Log in, list models, add a profile:
+
+```sh
+cd backend
+export PINTU_COPILOT_CLIENT_ID=Ov23...            # your app's client id
+uv run pintu login copilot                        # prints a URL and a code; approve in the browser
+uv run pintu models copilot                       # id, tools, vision, picker, endpoints
+```
+
+```toml
+[profiles.copilot]
+provider = "copilot"             # base_url defaults to https://api.githubcopilot.com
+model = "gpt-5.4"                # an id from `pintu models copilot`
+vision = true                    # only if the model's vision column is true
+tools = true                     # only if its tools column is true
+# token_exchange = true          # send a short-lived Copilot token (see below)
+# headers = {"Copilot-Integration-Id" = "..."}   # extra headers, if the API asks for them
+```
+
+3. Run the eval:
+
+```sh
+uv run python scripts/agent_eval.py --llm-config ~/.config/pintu/llm.toml --profile copilot \
+    --out ../local/agent-eval/copilot --parallel 1
+```
+
+**Login.** `pintu login copilot` runs GitHub's device flow (`POST
+github.com/login/device/code`, scope `read:user`, then polls `login/oauth/access_token`
+at the given interval plus 3 s, slowing down on `slow_down`). The GitHub token goes to
+`~/.config/pintu/copilot.json` (mode 0600; `PINTU_COPILOT_AUTH` names another file),
+never into the project. OAuth-app tokens do not expire; log in again if one is revoked.
+
+**Requests** to `https://api.githubcopilot.com/chat/completions` carry
+`Authorization: Bearer <GitHub token>`, `X-GitHub-Api-Version: 2026-06-01`,
+`User-Agent: pintu/<version>`, `Openai-Intent: conversation-edits`, `X-Interaction-Id`
+(one per run), and `x-initiator`: `user` on the first request of a run, `agent` after
+(Copilot bills premium requests per user-initiated request). Any image part adds
+`Copilot-Vision-Request: true`, which the API needs before it accepts images.
+`pintu models copilot` reads `GET /models` with the same auth.
+
+**Token exchange.** With `token_exchange = true`, pintu first trades the GitHub token at
+`GET api.github.com/copilot_internal/v2/token` for a Copilot token (about 30 min; kept in
+memory, renewed 5 min before `expires_at`) and sends that instead. This is the older,
+undocumented path used by editor plugins; it may reject tokens from other OAuth apps.
+
+**Errors.** A 401 renews the exchanged token and retries once; without exchange it stops
+with "run: pintu login copilot". 429 and 5xx are retried up to 4 times by the SDK,
+honouring `Retry-After` up to 120 s. Error text passes through `copilot.redact`, so tokens
+do not reach logs, transcripts or eval reports. Do not run with `OPENAI_LOG=debug`: the
+SDK then logs request headers.
+
+**Model quirks.** Copilot returns reasoning as `reasoning_text` and, for some models,
+an encrypted `reasoning_opaque`, which pintu echoes on the assistant message so the next
+turn keeps it. Replies that split text and tool calls across several choices are merged.
+Claude models list `/v1/messages` among their endpoints; pintu uses only
+`/chat/completions`, so pick models that list it.
+
+**Terms.** This uses the user's own subscription and counts against its premium-request
+allowance. GitHub's documented route for third-party apps is a user token from the app's
+own OAuth or GitHub App (as in the Copilot SDK docs), which is why pintu asks for your
+own client id rather than reusing another tool's (VS Code's or opencode's). Calling the
+Chat Completions API directly with it is how opencode works, but GitHub does not
+document that API for third parties.

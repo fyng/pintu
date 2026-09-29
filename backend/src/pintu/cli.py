@@ -1,10 +1,11 @@
-"""Command line: ``pintu serve``, ``pintu agent`` and ``pintu adapt``."""
+"""Command line: ``pintu serve``, ``agent``, ``adapt``, ``login copilot`` and ``models copilot``."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 
@@ -68,6 +69,32 @@ async def _run_agent(args, prompt: str | None) -> int:
     return 0 if final.ok else 1
 
 
+def _copilot(args) -> int:
+    from . import copilot
+    from .llm import load_profile
+
+    try:
+        if args.cmd == "login":
+            client_id = args.client_id or os.environ.get(copilot.CLIENT_ID_ENV)
+            if not client_id:
+                print(f"pintu: pass --client-id or set ${copilot.CLIENT_ID_ENV} (see docs/dev.md)", file=sys.stderr)
+                return 2
+            path = copilot.login(client_id, out=lambda s: print(s, flush=True))
+            print(f"logged in; GitHub token saved to {path}")
+            return 0
+        prof = load_profile(args.profile, args.llm_config) if args.profile else None
+        auth = copilot.CopilotAuth(exchange=bool(prof and prof.token_exchange))
+        models = copilot.list_models(auth, prof.base_url if prof else copilot.API)
+    except Exception as e:
+        print(f"pintu: {copilot.redact(str(e))}", file=sys.stderr)
+        return 1
+    print(f"{'model':<32} {'tools':<6} {'vision':<7} {'picker':<7} endpoints")
+    for m in sorted(models, key=lambda m: m["id"]):
+        print(f"{m['id']:<32} {str(m['tools']).lower():<6} {str(m['vision']).lower():<7} "
+              f"{str(m['picker']).lower():<7} {' '.join(m['endpoints']) or '-'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the ``pintu`` command."""
     ap = argparse.ArgumentParser(prog="pintu", description="Storyboard app for academic figures.")
@@ -82,7 +109,16 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("prompt")
     d = sub.add_parser("adapt", help="let the agent adapt a panel's recipe to a new size")
     _agent_args(d)
+    lg = sub.add_parser("login", help="log in to a hosted provider (GitHub device flow)")
+    lg.add_argument("provider", choices=["copilot"])
+    lg.add_argument("--client-id", help="GitHub OAuth app client id (default: $PINTU_COPILOT_CLIENT_ID)")
+    m = sub.add_parser("models", help="list a hosted provider's models")
+    m.add_argument("provider", choices=["copilot"])
+    m.add_argument("--profile", help="copilot profile in llm.toml, for its base_url and token_exchange")
+    m.add_argument("--llm-config", help="llm.toml path")
     args = ap.parse_args(argv)
+    if args.cmd in ("login", "models"):
+        sys.exit(_copilot(args))
     if args.cmd in ("agent", "adapt"):
         logging.basicConfig(level=logging.WARNING)
         sys.exit(asyncio.run(_run_agent(args, getattr(args, "prompt", None))))

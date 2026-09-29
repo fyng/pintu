@@ -315,6 +315,11 @@ The protocol is Chat Completions with `tools` and image content parts.
 - SGLang needs `--tool-call-parser`.
 - An endpoint without native tool calling sets `tools = false`, which switches to
   JSON in the text.
+- `provider = "copilot"` uses the user's GitHub Copilot subscription:
+  `pintu login copilot` (GitHub device flow, with the user's own OAuth app client
+  id) stores the GitHub token in `~/.config/pintu/` (0600); pintu then sets the
+  auth and Copilot headers per request on `api.githubcopilot.com`. `pintu models
+  copilot` lists the models with tool and vision support. No proxy process.
 
 **Entry points**
 
@@ -506,7 +511,9 @@ gate yet.
     held none, and tasks 3–5 hit a stopped server (503). Fixed without a live
     repro: text mode also takes server-parsed `tool_calls` and GLM's
     `<arg_key>` form, and a reply with no call before any edit gets one reminder.
-  - [ ] Eval on a hosted model: no endpoint yet.
+  - [ ] Eval on a hosted model. GitHub Copilot provider built (branch `copilot`,
+    unit tests with mocked HTTP); not yet run against the live API. Eval pending
+    the user's login (`pintu login copilot`, docs/dev.md).
   - [x] Merge into `prototype`; `render_panel` renders through the kernel
     (`Renders.render`, the board's path); the CLI builds its own
     (`agent.local_renders`).
