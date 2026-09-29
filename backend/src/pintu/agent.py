@@ -57,6 +57,9 @@ Paths are relative to the project root. When the task is done and the render is 
 reply with a one-paragraph summary of what you changed, without calling a tool.
 """
 
+NUDGE = ("Your reply had no tool_call_json block, and nothing has been edited yet. To call a tool, "
+         "write the block now. If the task needs no change, reply with the summary again.")
+
 ADAPT = """\
 Adapt panel {id} to its new size, {new} (it was designed for {old}). Edit the recipe so
 it uses the space well at the new size. Change the form if that serves the plot better:
@@ -483,7 +486,7 @@ class Agent:
             self._log({"type": "message", "message": _redact(m)})
         usage = {"prompt": 0, "completion": 0, "total": 0}
         called: list[str] = []
-        steps, stopped, text = 0, "step_cap", ""
+        steps, stopped, text, nudged = 0, "step_cap", "", False
         while steps < self.max_steps:
             steps += 1
             reply = await self.llm.chat(prune_images(messages), TOOLS)
@@ -496,8 +499,14 @@ class Agent:
                        "tool_calls": [{"name": c.name, "arguments": c.arguments, "error": c.error}
                                       for c in reply.tool_calls]})
             if not reply.tool_calls:
-                stopped = "done"
-                break
+                if prof.tools or nudged or {"edit_file", "set_cell"} & set(called):
+                    stopped = "done"
+                    break
+                nudged = True  # text mode: a reply that announces a call but writes none
+                m = {"role": "user", "content": NUDGE}
+                messages.append(m)
+                self._log({"type": "message", "message": m})
+                continue
             results, images = [], []
             for c in reply.tool_calls:
                 t1 = time.perf_counter()

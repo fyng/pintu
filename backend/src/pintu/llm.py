@@ -125,6 +125,7 @@ class Reply:
 _THINK = re.compile(r"<think>.*?</think>", re.S)
 _BLOCK = re.compile(r"<tool_call>(.*?)(?:</tool_call>|$)", re.S)
 _FENCE = re.compile(r"```\w*\s*(.*?)```", re.S)
+_GLM_ARG = re.compile(r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.S)
 
 
 def _objects(text: str) -> list[Any]:
@@ -174,17 +175,33 @@ def _args(raw: Any) -> tuple[dict, Optional[str]]:
     return {}, "arguments must be a JSON object"
 
 
+def _glm_call(chunk: str) -> list[dict]:
+    """GLM's native ``name<arg_key>k</arg_key><arg_value>v</arg_value>`` call body."""
+    name = chunk.split("<arg_key>", 1)[0].strip()
+    if not name.isidentifier():
+        return []
+    args = {}
+    for k, v in _GLM_ARG.findall(chunk):
+        try:
+            args[k.strip()] = json.loads(v)
+        except json.JSONDecodeError:
+            args[k.strip()] = v
+    return [{"name": name, "arguments": args}]
+
+
 def parse_text_calls(text: str) -> list[ToolCall]:
     """Tool calls written as JSON in the text.
 
     Accepts ``<tool_call>`` blocks, then fenced code blocks (the protocol asks for
     ``tool_call_json`` fences; some servers strip ``<tool_call>``), then bare JSON; each
     holding ``{"name", "arguments"}`` (or ``tool``/``args``), a list of those, or
-    ``{"tool_calls": [...]}``.
+    ``{"tool_calls": [...]}``. A ``<tool_call>`` block may also hold GLM's native
+    ``name<arg_key>..</arg_key><arg_value>..</arg_value>`` form.
     """
     text = _THINK.sub("", text)
     chunks = _BLOCK.findall(text) if "<tool_call>" in text else (_FENCE.findall(text) or [text])
-    calls = [c for chunk in chunks for obj in _objects(chunk) for c in _as_calls(obj)]
+    calls = [c for chunk in chunks
+             for c in ([c for obj in _objects(chunk) for c in _as_calls(obj)] or _glm_call(chunk))]
     out = []
     for k, c in enumerate(calls):
         args, err = _args(c["arguments"])
@@ -241,18 +258,23 @@ class LLM:
         if getattr(resp, "usage", None) is not None:
             u = resp.usage
             usage = {"prompt": u.prompt_tokens, "completion": u.completion_tokens, "total": u.total_tokens}
+        calls = []
+        for tc in getattr(msg, "tool_calls", None) or []:  # text mode too: vLLM may parse them out
+            args, err = _args(tc.function.arguments)
+            calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args, error=err))
         if self.profile.tools:
-            calls = []
-            for tc in getattr(msg, "tool_calls", None) or []:
-                args, err = _args(tc.function.arguments)
-                calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args, error=err))
             message = {"role": "assistant", "content": content or None}
             if calls:
                 message["tool_calls"] = [
                     {"id": c.id, "type": "function",
                      "function": {"name": c.name, "arguments": json.dumps(c.arguments)}} for c in calls]
         else:
-            calls = parse_text_calls(content)
+            if calls:  # show the server-parsed calls in the protocol's own form
+                content = "\n\n".join([content] + [
+                    "```tool_call_json\n" + json.dumps({"name": c.name, "arguments": c.arguments}) + "\n```"
+                    for c in calls]).strip()
+            else:
+                calls = parse_text_calls(content)
             message = {"role": "assistant", "content": content}
         return Reply(content=content, tool_calls=calls, reasoning=reasoning, usage=usage,
                      seconds=seconds, message=message)

@@ -106,8 +106,27 @@ def test_loop_text_mode(project):
     req = client.requests[-1]
     assert "tools" not in req
     assert "tool_call_json" in req["messages"][0]["content"] and "render_panel" in req["messages"][0]["content"]
-    results = req["messages"][-1]
+    results = req["messages"][3]
     assert results["role"] == "user" and "recipes/dist.py:" in results["content"][0]["text"]
+
+
+def test_text_mode_announced_call(project):
+    """Task 2 of the text eval: a reply that announces a call but has none must not end the run."""
+    a, client = make(project, [
+        text("I'll start by reading the style helper.", reasoning="Let me call read_file."),
+        native(calls=[("read_file", {"path": RECIPE})]),  # vLLM's parser took the call out of the text
+        text('<tool_call>edit_file<arg_key>path</arg_key><arg_value>recipes/dist.py</arg_value>'
+             '<arg_key>old_string</arg_key><arg_value>ax.set_ylabel("Response (a.u.)")</arg_value>'
+             '<arg_key>new_string</arg_key><arg_value>ax.set_ylabel("Response")</arg_value></tool_call>'),
+        text("Renamed the label."),
+    ], tools=False)
+    res = asyncio.run(a.run("rename the y label"))
+    assert res.stopped == "done" and res.steps == 4 and res.text == "Renamed the label."
+    assert res.tool_calls == ["read_file", "edit_file"]
+    assert 'ax.set_ylabel("Response")' in (project.root / RECIPE).read_text()
+    msgs = client.requests[-1]["messages"]
+    assert msgs[3] == {"role": "user", "content": ag.NUDGE}
+    assert "```tool_call_json" in msgs[4]["content"] and "read_file" in msgs[4]["content"]
 
 
 def test_parse_text_calls():

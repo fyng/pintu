@@ -127,7 +127,9 @@ latest two images stay in the history. Tool errors go back to the model as text.
 With `tools = false`, the system prompt lists the tools and asks for
 `{"name": ..., "arguments": {...}}` in code fences tagged `tool_call_json` (vLLM's GLM
 tool parser strips `<tool_call>` text even without tools); the parser also takes
-`<tool_call>` blocks, other fences and bare JSON. Results come back as a user message. Reasoning
+`<tool_call>` blocks (JSON or GLM's `<arg_key>`/`<arg_value>` form), other fences, bare
+JSON, and any `tool_calls` the server parsed out itself. A reply without a call before
+any edit gets one reminder instead of ending the run. Results come back as a user message. Reasoning
 (`reasoning_content`, `reasoning` or `<think>` tags) is logged and never parsed for
 tool calls.
 
