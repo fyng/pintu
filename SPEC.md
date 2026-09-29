@@ -211,14 +211,32 @@ panels:
     source: {file: outputs/timelines/P-0064072.pdf}   # static: no re-render
 ```
 
-**Sidecar** (`meta.json`, next to every output a recipe writes): `recipe`, `params`,
-`width_mm`, `height_mm`, `code_hash`, `git_sha`, `created`. Scripts outside pintu can
-write it with `pintu_sdk.save(fig, path, recipe=…, params=…)`. The gallery then treats
-the file as linked.
+**Sidecar**: `recipe`, `params`, `width_mm`, `height_mm`, `code_hash`, `git_sha`,
+`created`. A file's sidecar is `<name>.meta.json` beside it, else `meta.json` in its
+folder, which covers every output there.
 
-**Gallery.** Indexes image and PDF files under the scan paths. It groups linked
-outputs by recipe and filters them by parameter (for example, 300 patients down to
-3). The gallery reads files; it does not require sidecars.
+- Scripts outside pintu write the per-file form with
+  `pintu_sdk.save(fig, path, recipe=…, params=…)`; `code_hash` is computed as the
+  render worker does.
+- pintu's own renders write the folder form in `pintu_out/<recipe>/<param-hash>/`.
+  Its size fields describe the newest render; each file's size comes from its
+  `<w>x<h>` name.
+
+A file with a sidecar that names a recipe is *linked*.
+
+**Gallery.** Indexes image and PDF files under the scan paths (`[gallery] paths` in
+`pintu.toml`, default the whole project; hidden folders and `boards/build` skipped)
+into `.pintu/catalog.sqlite`. It groups linked outputs by recipe and filters them by
+parameter (for example, 300 patients down to 3): values of one key OR, keys AND.
+Linked outputs with the same recipe and params show once, as the newest file. The
+gallery reads files; it does not require sidecars.
+
+- Rescans are incremental by mtime and size of the file and its sidecar; `watchfiles`
+  triggers them and pushes a `gallery` message to clients.
+- Thumbnails are PNGs from typst-py (the first page of a PDF), cached in
+  `.pintu/thumbs/`; the API pages items, and images load lazily.
+- Dropping a linked item makes a `recipe` panel with its `params`, rendered at the
+  cell size; an unlinked item makes a static `file` panel.
 
 **Sync between board, plot and code**
 
@@ -543,6 +561,20 @@ eval runs. No stack change.
 - [x] Letter band (§6): a lettered panel renders its source below a 3.5 mm band,
   so recipes need no letter-zone clearance; the letter-zone lint and prompt rule
   are gone. Preview median 25 ms, max 57 ms on the demo boards.
+
+**Build steps**
+
+- [ ] B1 Gallery, catalog, sidecars, filters, multiples, groups. In progress.
+  - [x] `pintu_sdk.save` and sidecars; SQLite catalog with incremental and live
+    rescans; typst-py PNG thumbnails; gallery API (groups, facets, filters, pages);
+    gallery panel with drag onto the board; `examples/demo/scripts/make_gallery.py`
+    writes 300 linked timelines (`recipes/cohort.py`).
+  - [x] Gallery budget on the 300 items, first page (60 items) plus 24 thumbnails
+    through the API: warm 61–97 ms, cold (no catalog, no thumbnails) 181 ms on local
+    disk and 503 ms on the network filesystem. In the browser (Playwright), picking
+    the recipe to every visible thumbnail decoded: 157–294 ms, cold thumbnails; one
+    run at 2.9 s, beside the other e2e specs rendering recipes in parallel.
+  - [ ] Multiples panels, groups, gallery drops into multiples cells; the exit test.
 
 **Known bugs and gaps**
 

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { Canvas, canvasCoords } from "./components/Canvas";
 import { FileBrowser } from "./components/FileBrowser";
+import { Gallery } from "./components/Gallery";
 import { Inspector } from "./components/Inspector";
 import { Preview } from "./components/Preview";
 import { dropCell, pitch, rect } from "./geometry";
@@ -13,6 +14,7 @@ export function App() {
   const load = useStore((s) => s.load);
   const commit = useStore((s) => s.commit);
   const [dragging, setDragging] = useState<string | null>(null);
+  const [tab, setTab] = useState<"files" | "gallery">("gallery");
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   useEffect(() => {
@@ -41,7 +43,10 @@ export function App() {
   const onDragEnd = (e: DragEndEvent) => {
     setDragging(null);
     const b = useStore.getState().board;
-    const path = e.active.data.current?.path as string | undefined;
+    const data = e.active.data.current;
+    const path = data?.path as string | undefined;
+    const recipe = data?.recipe as string | null | undefined;
+    const params = (data?.params ?? {}) as Record<string, unknown>;
     const start = e.activatorEvent as PointerEvent;
     if (!b || !path || e.over?.id !== "canvas" || !canvasCoords.toMm) return;
     const mm = canvasCoords.toMm(start.clientX + e.delta.x, start.clientY + e.delta.y);
@@ -51,11 +56,12 @@ export function App() {
       const [px, py, w, h] = rect(b.page, p.cell);
       return x >= px && x <= px + w && y >= py && y <= py + h;
     });
-    if (hit) return void commit([{ op: "set_source", id: hit.id, file: path }]);
+    if (hit) return void commit([recipe ? { op: "set_recipe", id: hit.id, recipe, params } : { op: "set_source", id: hit.id, file: path }]);
     const ux = Math.floor(x / pitch(b.page.width, b.page.grid[0], b.page.gutter));
     const uy = Math.floor(y / pitch(b.page.height, b.page.grid[1], b.page.gutter));
     const cell = dropCell(b.page, b.panels.map((p) => p.cell), ux, uy);
-    if (cell) commit([{ op: "add", cell, file: path }]);
+    // Linked gallery items become recipe panels, which re-render at the cell size.
+    if (cell) commit([recipe ? { op: "add", cell, recipe, params } : { op: "add", cell, file: path }]);
   };
 
   const newBoard = async () => {
@@ -71,7 +77,7 @@ export function App() {
   };
 
   return (
-    <DndContext sensors={sensors} onDragStart={(e) => setDragging(String(e.active.data.current?.path))} onDragEnd={onDragEnd}
+    <DndContext sensors={sensors} onDragStart={(e) => setDragging(String(e.active.data.current?.label ?? e.active.data.current?.path))} onDragEnd={onDragEnd}
       onDragCancel={() => setDragging(null)}>
       <div className="app">
         <header>
@@ -83,7 +89,13 @@ export function App() {
           {error && <span className="error" data-testid="error">{error}</span>}
           {[...(board?.warnings ?? []), ...warnings].map((w, i) => <span key={i} className="warn">{w}</span>)}
         </header>
-        <aside><FileBrowser /></aside>
+        <aside>
+          <div className="tabs">
+            <button className={tab === "gallery" ? "on" : ""} onClick={() => setTab("gallery")}>Gallery</button>
+            <button className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>Files</button>
+          </div>
+          {tab === "gallery" ? <Gallery /> : <FileBrowser />}
+        </aside>
         <main>{board ? <Canvas /> : <p>No board. Create one.</p>}</main>
         <section className="side">
           {board && <Inspector />}

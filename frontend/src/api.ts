@@ -1,3 +1,4 @@
+import type { Facet, GalleryPage } from "./gallery";
 import type { Cell, Page } from "./geometry";
 
 export interface Panel {
@@ -73,5 +74,9 @@ export const api = {
     `/api/thumb?path=${encodeURIComponent(path)}${version ? `&v=${version}` : ""}`,
   locate: (recipe: string) => fetch(`/api/recipes/locate?recipe=${encodeURIComponent(recipe)}`).then((r) => json<RecipeLocation>(r)),
   openRecipe: (recipe: string) => post("/api/recipes/open", { recipe }).then((r) => json<{ opened: boolean; command: string | null }>(r)),
+  gallery: (query: string) => fetch(`/api/gallery?${query}`).then((r) => json<GalleryPage>(r)),
+  facets: (recipe: string) =>
+    fetch(`/api/gallery/facets?recipe=${encodeURIComponent(recipe)}`).then((r) => json<{ params: Record<string, Facet[]> }>(r)),
+  galleryThumbUrl: (path: string, version: number) => `/api/gallery/thumb?path=${encodeURIComponent(path)}&v=${version}`,
   pdfUrl: (name: string) => `/api/boards/${encodeURIComponent(name)}/preview.pdf`,
 };
