@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+dist/
+
+# Node
+node_modules/
+frontend/test-results/
+frontend/playwright-report/
+
+# Frontend build, copied into the backend package by `npm run build`
+backend/src/pintu/static/
+
+# pintu project outputs
+boards/build/
+.pintu/
+pintu_out/
+
+# Local exit-test material (not part of the repo)
+local/
+*.tsbuildinfo

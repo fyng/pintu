@@ -1,0 +1,330 @@
+"""FastAPI app: board REST API, preview push over WebSocket, file browser."""
+
+from __future__ import annotations
+
+import asyncio
+import collections
+import contextlib
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from watchfiles import awatch
+
+from . import codegen, style as styles
+from .board import Board, BoardError
+from .project import BOARD_SUFFIX, IMAGE_KINDS, PathError, Project
+from .render import Renderer
+
+log = logging.getLogger("pintu")
+STATIC = Path(__file__).parent / "static"
+
+
+class NewBoard(BaseModel):
+    name: str
+    width: float = 183
+    height: float = 170
+    grid: int = 36
+    gutter: float = 3
+
+
+class Ops(BaseModel):
+    ops: list[dict[str, Any]]
+
+
+class State:
+    """Open boards, their revisions and connected clients."""
+
+    def __init__(self, project: Project):
+        self.project = project
+        self.renderer = Renderer(project)
+        self.boards: dict[str, Board] = {}
+        self.rev: dict[str, int] = {}
+        self.written: dict[str, collections.deque] = collections.defaultdict(lambda: collections.deque(maxlen=32))
+        # One writer thread keeps disk writes ordered and off the preview path.
+        self.writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pintu-writer")
+        self.clients: set[WebSocket] = set()
+        self.lock = asyncio.Lock()
+
+    def get(self, name: str) -> Board:
+        if name not in self.boards:
+            path = self.project.board_path(name)
+            if not path.exists():
+                raise HTTPException(404, f"no board {name!r}")
+            self.boards[name] = Board.load(path)
+            self.rev[name] = 1
+        return self.boards[name]
+
+    def save(self, name: str, board: Board) -> None:
+        """Takes the board as current and queues its file write."""
+        text = board.dumps()
+        self.written[name].append(text)
+        self.boards[name] = board
+        self.rev[name] = self.rev.get(name, 0) + 1
+        self.writer.submit(self.project.board_path(name).write_text, text, encoding="utf-8")
+
+    def file_ok(self, rel: str) -> bool:
+        try:
+            return self.project.resolve(rel).is_file()
+        except PathError:
+            return False
+
+    def view(self, name: str) -> dict:
+        """Board state for the frontend."""
+        b = self.get(name)
+        page = b.page
+        st = styles.get(b.style)
+        letters = b.letters()
+        panels, warnings = [], []
+        if page.height > st["max_height"]:
+            warnings.append(f"page height {page.height:g} mm exceeds the {st['name']} cap of {st['max_height']:g} mm")
+        for p in b.panels:
+            f, kind, label = codegen.panel_source(p, self.file_ok)
+            src = dict(p.get("source") or {})
+            if f is None and label != p["id"]:
+                warnings.append(label)
+            setting = p.get("letter", "auto")
+            panels.append({
+                "id": p["id"],
+                "cell": list(p["cell"]),
+                "rect": list(page.rect(p["cell"])),
+                "letter": letters[p["id"]].lower() if letters[p["id"]] and st["letter"]["lower"] else letters[p["id"]],
+                "letterSetting": None if setting is None or setting is False else setting,
+                "source": {k: src[k] for k in ("file", "recipe") if k in src},
+                "file": f,
+                "kind": kind if f else None,
+            })
+        return {
+            "name": name,
+            "rev": self.rev[name],
+            "page": {"width": page.width, "height": page.height, "grid": [page.nx, page.ny],
+                     "gutter": page.gutter, "style": b.style},
+            "preset": {"widths": st["widths"], "maxHeight": st["max_height"],
+                       "letterZone": st["letter"]["zone_mm"]},
+            "panels": panels,
+            "warnings": warnings,
+        }
+
+    async def broadcast(self, msg: dict) -> None:
+        for ws in list(self.clients):
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                self.clients.discard(ws)
+
+    async def publish(self, name: str) -> None:
+        """Pushes board state, then the compiled SVG preview, then writes the PDF."""
+        await self.broadcast({"type": "board", "board": self.view(name)})
+        rev, board = self.rev[name], self.boards[name]
+        try:
+            svg, src, ms = await asyncio.to_thread(self.renderer.svg, name, board)
+        except Exception as e:
+            await self.broadcast({"type": "error", "name": name, "message": f"typst: {e}"})
+            return
+        await self.broadcast({"type": "preview", "name": name, "rev": rev, "ms": round(ms, 2),
+                              "svg": svg.decode("utf-8")})
+        self.writer.submit(self.renderer.write, name, src)
+
+
+def _check_file(state: State, rel: Optional[str]) -> Optional[str]:
+    if rel is None:
+        return None
+    path = state.project.resolve(rel)
+    if not path.is_file():
+        raise BoardError(f"not a file: {rel}")
+    if path.suffix.lower() not in IMAGE_KINDS:
+        raise BoardError(f"unsupported file type: {rel}")
+    return state.project.relative(path)
+
+
+def apply_ops(state: State, board: Board, ops: list[dict]) -> list[str]:
+    """Applies edits to a board in place. Returns warnings.
+
+    Raises:
+        BoardError: An edit is invalid.
+    """
+    warnings = []
+    for op in ops:
+        kind = op.get("op")
+        if kind == "set_cell":
+            board.set_cell(op["id"], op["cell"])
+        elif kind == "add":
+            board.add_panel(op["cell"], _check_file(state, op.get("file")), op.get("id"))
+        elif kind == "remove":
+            board.remove_panel(op["id"])
+        elif kind == "set_source":
+            board.set_source_file(op["id"], _check_file(state, op.get("file")))
+        elif kind == "set_letter":
+            board.set_letter(op["id"], op.get("letter"))
+        elif kind == "split":
+            ids, exact = board.split(op["id"], int(op["n"]), op.get("axis", "x"))
+            if not exact:
+                warnings.append(f"split of {op['id']} into {op['n']} is not exact; parts differ by one grid unit")
+        elif kind == "set_page":
+            board.set_page(**{k: op[k] for k in ("width", "height", "grid", "gutter", "style") if k in op})
+        else:
+            raise BoardError(f"unknown op {kind!r}")
+    board.validate()
+    return warnings
+
+
+def create_app(project: Project, dev: bool = False, watch: bool = True) -> FastAPI:
+    """Builds the app for a project.
+
+    Args:
+        project: The open project.
+        dev: Skip serving the built frontend (Vite serves it).
+        watch: Reload boards when their files change on disk.
+    """
+    state = State(project)
+
+    async def watcher() -> None:
+        project.boards_dir.mkdir(exist_ok=True)
+        async for changes in awatch(project.boards_dir, recursive=False):
+            for _, p in changes:
+                if not p.endswith(BOARD_SUFFIX):
+                    continue
+                name = Path(p).name[: -len(BOARD_SUFFIX)]
+                path = Path(p)
+                if not path.exists():
+                    continue
+                text = path.read_text(encoding="utf-8")
+                if text in state.written[name]:
+                    continue
+                async with state.lock:
+                    try:
+                        board = Board.loads(text)
+                    except BoardError as e:
+                        await state.broadcast({"type": "error", "name": name, "message": str(e)})
+                        continue
+                    state.written[name].append(text)
+                    state.boards[name] = board
+                    state.rev[name] = state.rev.get(name, 0) + 1
+                    await state.publish(name)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        task = asyncio.create_task(watcher()) if watch else None
+        yield
+        state.writer.shutdown(wait=True)
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(title="pintu", lifespan=lifespan)
+    app.state.pintu = state
+
+    @app.get("/api/project")
+    def get_project():
+        return {"name": project.root.name, "boards": sorted(set(project.board_names()) | set(state.boards))}
+
+    @app.post("/api/boards")
+    async def new_board(req: NewBoard):
+        try:
+            path = project.board_path(req.name)
+        except PathError as e:
+            raise HTTPException(400, str(e))
+        if path.exists():
+            raise HTTPException(409, f"board {req.name!r} exists")
+        project.boards_dir.mkdir(exist_ok=True)
+        async with state.lock:
+            state.save(req.name, Board.new(req.width, req.height, req.grid, req.gutter))
+        return state.view(req.name)
+
+    @app.get("/api/boards/{name}")
+    def get_board(name: str):
+        try:
+            return state.view(name)
+        except (BoardError, PathError) as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/boards/{name}/ops")
+    async def post_ops(name: str, req: Ops):
+        async with state.lock:
+            try:
+                board = Board.loads(state.get(name).dumps())
+                warnings = apply_ops(state, board, req.ops)
+            except (BoardError, PathError, KeyError, TypeError, ValueError) as e:
+                raise HTTPException(400, str(e))
+            state.save(name, board)
+            await state.publish(name)
+        return {**state.view(name), "opWarnings": warnings}
+
+    @app.get("/api/boards/{name}/preview.svg")
+    async def preview_svg(name: str):
+        svg, _, _ = await asyncio.to_thread(state.renderer.svg, name, state.get(name))
+        return Response(svg, media_type="image/svg+xml")
+
+    @app.get("/api/boards/{name}/preview.pdf")
+    async def preview_pdf(name: str):
+        src = state.renderer.source(name, state.get(name))
+        pdf = await asyncio.to_thread(state.renderer.compile, src, "pdf")
+        return Response(pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{name}.pdf"'})
+
+    @app.get("/api/files")
+    def list_files(path: str = ""):
+        try:
+            return {"path": path, "entries": project.list_dir(path)}
+        except PathError as e:
+            raise HTTPException(400, str(e))
+
+    def _file(path: str) -> Path:
+        try:
+            p = project.resolve(path)
+        except PathError as e:
+            raise HTTPException(400, str(e))
+        if not p.is_file():
+            raise HTTPException(404, "not found")
+        return p
+
+    @app.get("/api/raw")
+    def raw(path: str):
+        return FileResponse(_file(path))
+
+    @app.get("/api/thumb")
+    async def thumb(path: str):
+        p = _file(path)
+        if p.suffix.lower() != ".pdf":
+            return FileResponse(p)
+        try:
+            svg = await asyncio.to_thread(state.renderer.thumb, path)
+        except Exception as e:
+            raise HTTPException(422, f"cannot render {path}: {e}")
+        return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "no-cache"})
+
+    @app.websocket("/api/ws")
+    async def ws(sock: WebSocket):
+        await sock.accept()
+        state.clients.add(sock)
+        try:
+            while True:
+                msg = await sock.receive_json()
+                if msg.get("type") == "open" and msg.get("name"):
+                    name = msg["name"]
+                    try:
+                        state.get(name)
+                    except HTTPException:
+                        continue
+                    svg, _, ms = await asyncio.to_thread(state.renderer.svg, name, state.boards[name])
+                    await sock.send_json({"type": "preview", "name": name, "rev": state.rev[name],
+                                          "ms": round(ms, 2), "svg": svg.decode("utf-8")})
+        except WebSocketDisconnect:
+            pass
+        finally:
+            state.clients.discard(sock)
+
+    if not dev and (STATIC / "index.html").exists():
+        app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+    elif not dev:
+        @app.get("/", response_class=HTMLResponse)
+        def no_frontend():
+            return "<p>pintu: frontend not built. Run <code>npm run build</code> in frontend/.</p>"
+
+    return app
