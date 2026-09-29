@@ -169,13 +169,22 @@ Edges snap to lines.
 or clear any letter. A multiples panel takes one letter; a *group* (several panels
 drawn by different functions) takes one letter on the group and none on its members.
 
+- A group is an entry in the board's `groups:` list (§7). It counts as one unit in
+  reading order, placed by the bounding box of its members' cells; its letter
+  setting sits on the group, and a member's own `letter` key is ignored.
+- Shift-click selects several panels; the inspector groups them, and ungroups a
+  member's group. A panel is in at most one group; deleting a member down to one
+  dissolves the group.
+
 **Letter band.** A lettered panel reserves a full-width band at its top, and the
 letter sits in it. The source fills the area below: a recipe renders at
 `(w, h − band)`, a static file is fitted into it. A panel without a letter gets the
 whole cell. The band is 3.5 mm by default (an 8 pt letter, 2.8 mm, plus a pad), set
 by the style pack (`letter.band_mm`) or per board (`page.letter_band`), and at most
-half the cell height. On a group, the band sits on the group (groups are not built
-yet).
+half the cell height. On a group, the band runs along the top edge of the group's
+bounding box: the members whose top edge is on it reserve the band, members below it
+get none, and the letter sits on the leftmost member on that edge. When members do
+not share a top edge, only the highest ones reserve the band.
 
 ## 7. Files and sync
 
@@ -209,7 +218,16 @@ panels:
     letter: h
     cell: [18, 24, 36, 36]
     source: {file: outputs/timelines/P-0064072.pdf}   # static: no re-render
+  - {id: dose, cell: [0, 24, 9, 36], source: {file: outputs/dose.pdf}}
+  - {id: tox, cell: [9, 24, 18, 36], source: {file: outputs/tox.pdf}}
+groups:                          # optional; members share one letter
+  - {id: safety, panels: [dose, tox], letter: g}   # letter optional, as on a panel
 ```
+
+`multiples` takes `item`, `mosaic`, and optionally `share` (default `{x: all, y: all}`),
+`width_ratios` and `height_ratios`. A panel dropped from the gallery is named after
+its recipe function and its item param value (`timeline-S002`), or the only param's
+value.
 
 **Sidecar**: `recipe`, `params`, `width_mm`, `height_mm`, `code_hash`, `git_sha`,
 `created`. A file's sidecar is `<name>.meta.json` beside it, else `meta.json` in its
@@ -293,22 +311,44 @@ def km_one(ax, cohort): ...
 
 - **Mosaic.** The arrangement is a nested list of item values, in the form that
   matplotlib's `Figure.subplot_mosaic` takes.
-  - A repeated value spans cells.
+  - A repeated value spans cells; its cells must form a rectangle.
   - `"."` leaves a cell empty.
   - `width_ratios` and `height_ratios` set uneven cells.
 - **One render.** The SDK builds the panel at (w, h), with:
-  - margins from the style pack,
-  - axes shared per `share` (`all`, `row`, `col`, `none`),
-  - axis labels on the outer edges only,
-  - one shared key.
+  - margins from the style pack (`style.margins`, passed to the kernel with each
+    render),
+  - axes shared per `share` (`all`, `row`, `col`, `none`, for x and y),
+  - axis labels on the outer edges only: an axes keeps them if no axes sit directly
+    below it (x) or left of it (y); shared tick labels hide the same way,
+  - one shared key, from every axes' legend handles, above the grid.
 
-  One render draws every sub-plot, so shared limits need no coordination.
+  One render draws every sub-plot, so shared limits need no coordination. The
+  render cache key and output hash include the mosaic, share, ratios and margins.
+  Called without a mosaic, the recipe draws the item passed by name as 1 × 1, so
+  scratch scripts and plain panels use the same function.
 - **Editing.** The inspector shows the inner grid. The user sets rows × columns,
   drags items to reorder or span them, and drops gallery items into cells. Each edit
   rewrites `mosaic` in the board file.
+  - A recipe panel whose recipe is `@multiples` offers "Make multiples": its item
+    param becomes a 1 × 1 mosaic.
+  - Dropping an item on another swaps them; on an empty cell, it moves there. The
+    corner handle spans an item from its top-left to the target cell.
+  - A linked gallery item fills a cell if its recipe is the panel's and it has the
+    `item` param; dropped on the panel itself, it takes the first empty cell, or a
+    new column.
 - **Resize.** The mosaic stays as it is. Below `min_cell`, the panel offers a reflow
   (for example 1 × 5 → 2 × 3), which the user accepts or rejects.
-- **Without the SDK,** a recipe that accepts `mosaic` and `share` works the same.
+  - The check uses the mean axes size the SDK's layout gives at the render size.
+  - The offer lays items out one cell each in reading order, on the grid with room
+    for all whose cells meet `min_cell` with the fewest empty cells (ties: aspect
+    closest to `min_cell`'s); if none meets it, the grid closest to it. No offer if
+    that is no better than the current grid. Rejecting hides it until the mosaic or
+    size changes.
+  - pintu reads `min_cell` and the item param from the decorator with `ast`, with no
+    import.
+- **Without the SDK,** a recipe that accepts `mosaic` and `share` works the same:
+  it is called as `fn(w, h, mosaic=…, share={x, y}, **params)`, plus the ratios if
+  set.
 
 **Lint**, on each render:
 
@@ -564,7 +604,7 @@ eval runs. No stack change.
 
 **Build steps**
 
-- [ ] B1 Gallery, catalog, sidecars, filters, multiples, groups. In progress.
+- [x] B1 Gallery, catalog, sidecars, filters, multiples, groups.
   - [x] `pintu_sdk.save` and sidecars; SQLite catalog with incremental and live
     rescans; typst-py PNG thumbnails; gallery API (groups, facets, filters, pages);
     gallery panel with drag onto the board; `examples/demo/scripts/make_gallery.py`
@@ -574,7 +614,17 @@ eval runs. No stack change.
     disk and 503 ms on the network filesystem. In the browser (Playwright), picking
     the recipe to every visible thumbnail decoded: 157–294 ms, cold thumbnails; one
     run at 2.9 s, beside the other e2e specs rendering recipes in parallel.
-  - [ ] Multiples panels, groups, gallery drops into multiples cells; the exit test.
+  - [x] Multiples panels: `pintu_sdk.multiples` and `choice`; mosaic, share,
+    outer-edge labels, one key; inspector inner grid with dnd-kit (rows × columns,
+    move, swap, span, gallery drops into cells); reflow offer below `min_cell`;
+    demo `recipes.cohort:timeline` is a multiples recipe.
+  - [x] Groups: `groups:` in the board file, one letter and one band per group,
+    shift-click to group, ungroup in the inspector.
+  - [x] Gallery-dropped panels get readable ids (`timeline-S002`), not `panel`.
+  - [x] Exit test (Playwright `e2e/multiples.spec.ts`): pick the 300 timelines,
+    filter to 3, drop one on the board, make it a multiples panel, drag the other two
+    into its 1 × 3 grid, swap the first and last; the board file reads
+    `mosaic: [[S009, S005, S002]]` and the render's sidecar and SVG follow.
 
 **Known bugs and gaps**
 

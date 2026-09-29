@@ -21,12 +21,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from watchfiles import PythonFilter, awatch
 
-from . import codegen, gallery, style as styles
+from . import codegen, gallery, multiples as mult, style as styles
 from .board import Board, BoardError
 from .catalog import Catalog
 from .kernel import KernelRunner
 from .project import BOARD_SUFFIX, IMAGE_KINDS, PathError, Project
-from .recipes import Runner, locate
+from .recipes import Runner, locate, module_file
 from .render import Renderer
 from .renders import Renders, file_version
 
@@ -68,6 +68,11 @@ class State:
         self.renders = Renders(project, runner or KernelRunner(project), self._rendered,
                                save=lambda: self.writer.submit(self.renders.cache.save))
         self.renderer = Renderer(project, recipe_svg=self.renders.shown)
+        self._meta: dict[tuple, Optional[dict]] = {}
+
+    def multiples_meta(self, recipe: str) -> Optional[dict]:
+        """``item`` and ``min_cell`` of a ``@multiples`` recipe, cached by file mtime; None for others."""
+        return recipe_multiples(self.project, recipe, self._meta)
 
     def get(self, name: str) -> Board:
         if name not in self.boards:
@@ -117,7 +122,8 @@ class State:
             src = dict(p.get("source") or {})
             if f is None and label != p["id"] and "recipe" not in src:
                 warnings.append(label)
-            setting = p.get("letter", "auto")
+            grp = b.group_of(p["id"])
+            setting = (grp or p).get("letter", "auto")
             panels.append({
                 "id": p["id"],
                 "cell": list(p["cell"]),
@@ -129,9 +135,17 @@ class State:
                 "file": f,
                 "fileVersion": file_version(self.project, f),
                 "kind": kind if f else None,
-                **({"params": src.get("params") or {}, "render": self.render_view(name, p["id"])}
+                "group": grp["id"] if grp else None,
+                **({"params": src.get("params") or {}, "render": self.render_view(name, p["id"]),
+                    **self.multiples_view(b, p)}
                    if "recipe" in src else {}),
             })
+        units = b.unit_letters()
+        groups = [{"id": g["id"], "panels": list(g["panels"]), "cell": list(b.group_cell(g)),
+                   "rect": list(page.rect(b.group_cell(g))),
+                   "letter": units[g["id"]].lower() if units[g["id"]] and st["letter"]["lower"] else units[g["id"]],
+                   "letterSetting": None if g.get("letter", "auto") in (None, False) else g.get("letter", "auto")}
+                  for g in b.groups]
         return {
             "name": name,
             "rev": self.rev[name],
@@ -140,8 +154,29 @@ class State:
             "preset": {"widths": st["widths"], "maxHeight": st["max_height"],
                        "letterBand": b.letter_band},
             "panels": panels,
+            "groups": groups,
             "warnings": warnings,
         }
+
+    def multiples_view(self, b: Board, p: dict) -> dict:
+        """A recipe panel's multiples state: the recipe's item param, and for a multiples panel its
+        mosaic, share, ratios, ``min_cell``, mean cell size in mm and any reflow on offer."""
+        src = p["source"]
+        meta = self.multiples_meta(str(src["recipe"]))
+        out: dict[str, Any] = {"multiplesItem": meta["item"] if meta else None}
+        m = src.get("multiples")
+        if isinstance(m, dict):
+            kw = mult.call_kwargs(m)
+            nrows, ncols, _ = mult.parse(kw["mosaic"])
+            margins = styles.margins(b.style)
+            _, _, w, h = b.content_rect(p)
+            min_cell = meta["min_cell"] if meta else None
+            out["multiples"] = {
+                "item": str(m["item"]), **kw, "minCell": min_cell,
+                "cellMm": [round(v, 2) for v in mult.cell_size(w, h, nrows, ncols, margins, kw["share"])],
+                "reflow": mult.reflow(m, w, h, min_cell, margins),
+            }
+        return out
 
     def render_view(self, name: str, pid: str) -> dict:
         """Render status of a recipe panel for the frontend."""
@@ -206,7 +241,9 @@ def apply_ops(project: Project, board: Board, ops: list[dict]) -> list[str]:
         if kind == "set_cell":
             board.set_cell(op["id"], op["cell"])
         elif kind == "add":
-            pid = board.add_panel(op["cell"], _check_file(project, op.get("file")), op.get("id"))
+            pid = op.get("id") or (recipe_panel_id(project, str(op["recipe"]), op.get("params") or {})
+                                   if op.get("recipe") else None)
+            pid = board.add_panel(op["cell"], _check_file(project, op.get("file")), pid)
             if op.get("recipe"):
                 board.set_recipe(pid, str(op["recipe"]), op.get("params"))
         elif kind == "remove":
@@ -217,6 +254,13 @@ def apply_ops(project: Project, board: Board, ops: list[dict]) -> list[str]:
             board.set_recipe(op["id"], str(op["recipe"]), op.get("params"))
         elif kind == "set_letter":
             board.set_letter(op["id"], op.get("letter"))
+        elif kind == "set_multiples":
+            board.set_multiples(op["id"], **{k: op[k] for k in
+                                             ("item", "mosaic", "share", "width_ratios", "height_ratios") if k in op})
+        elif kind == "group":
+            board.add_group(list(op["ids"]), op.get("group"))
+        elif kind == "ungroup":
+            board.ungroup(op["group"])
         elif kind == "split":
             ids, exact = board.split(op["id"], int(op["n"]), op.get("axis", "x"))
             if not exact:
@@ -227,6 +271,33 @@ def apply_ops(project: Project, board: Board, ops: list[dict]) -> list[str]:
             raise BoardError(f"unknown op {kind!r}")
     board.validate()
     return warnings
+
+
+def recipe_multiples(project: Project, recipe: str, memo: Optional[dict] = None) -> Optional[dict]:
+    """``multiples.recipe_meta`` of a recipe, memoised by module path and mtime."""
+    f = module_file(project, recipe)
+    try:
+        key = (recipe, str(f), f.stat().st_mtime_ns) if f else None
+    except OSError:
+        key = None
+    if key is None:
+        return None
+    if memo is None or key not in memo:
+        meta = mult.recipe_meta(f, recipe.partition(":")[2])
+        if memo is None:
+            return meta
+        memo[key] = meta
+    return memo[key]
+
+
+def recipe_panel_id(project: Project, recipe: str, params: dict) -> str:
+    """A readable id for a new recipe panel: the function name, plus the item param's value
+    (a ``@multiples`` recipe) or the only param's value."""
+    fn = recipe.partition(":")[2].rsplit(".", 1)[-1] or "panel"
+    meta = recipe_multiples(project, recipe)
+    if meta and meta["item"] in params:
+        return f"{fn}-{params[meta['item']]}"
+    return f"{fn}-{next(iter(params.values()))}" if len(params) == 1 else fn
 
 
 def open_command(path: Path, line: int) -> Optional[list[str]]:

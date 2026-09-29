@@ -8,7 +8,9 @@ the standard library and matplotlib. Two ways to run it:
 - In a kernel: execute the source, then call ``render(request)``.
 
 Request keys: ``root``, ``recipe`` (``module.path:function``), ``params``,
-``width_mm``, ``height_mm``, ``out`` (absolute SVG path).
+``width_mm``, ``height_mm``, ``out`` (absolute SVG path), and for a multiples
+panel ``multiples``: keyword arguments for the recipe (``mosaic``, ``share``,
+ratios) plus ``margins``, which reach ``pintu_sdk`` as ``PINTU_MARGINS``.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import ast
 import hashlib
 import importlib
 import json
+import os
 import sys
 import time
 import traceback
@@ -25,6 +28,7 @@ from pathlib import Path
 
 MM = 25.4
 MARKER = "PINTU_RESULT "
+MARGINS_ENV = "PINTU_MARGINS"  # matches pintu_sdk.multiples.MARGINS_ENV
 
 
 def module_path(root: str, name: str) -> Path | None:
@@ -214,7 +218,9 @@ def render(req: dict) -> dict:
 
         fn, mod = load(req["root"], req["recipe"])
         w, h = float(req["width_mm"]), float(req["height_mm"])
-        fig = fn(w, h, **(req.get("params") or {}))
+        mult = dict(req.get("multiples") or {})
+        os.environ[MARGINS_ENV] = json.dumps(mult.pop("margins", {}))
+        fig = fn(w, h, **(req.get("params") or {}), **mult)
         if not isinstance(fig, Figure):
             raise TypeError(f"recipe returned {type(fig).__name__}, expected matplotlib Figure")
         out = Path(req["out"])
@@ -229,6 +235,7 @@ def render(req: dict) -> dict:
             "params": req.get("params") or {},
             "width_mm": w,
             "height_mm": h,
+            **({"multiples": mult} if mult else {}),
             "code_hash": chash,
             "git_sha": _git_sha(req["root"]),
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),

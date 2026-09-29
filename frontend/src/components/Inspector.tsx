@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from "react";
 import type { Panel } from "../api";
 import { splitExact } from "../geometry";
 import { useStore } from "../store";
+import { MultiplesEditor } from "./MultiplesEditor";
 
 const CodeView = lazy(() => import("./CodeView").then((m) => ({ default: m.CodeView })));
 
@@ -11,6 +12,7 @@ export function Inspector() {
   const selected = useStore((s) => s.selected);
   const commit = useStore((s) => s.commit);
   const select = useStore((s) => s.select);
+  const selection = useStore((s) => s.selection);
   const [n, setN] = useState(2);
   const [axis, setAxis] = useState<"x" | "y">("x");
   const p = board.panels.find((q) => q.id === selected);
@@ -37,11 +39,31 @@ export function Inspector() {
     );
   }
 
+  if (selection.length > 1) {
+    return (
+      <div className="inspector" data-testid="inspector">
+        <h3>{selection.length} panels</h3>
+        <div className="meta">{selection.join(", ")}</div>
+        <div className="row">
+          <button data-testid="group" onClick={() => commit([{ op: "group", ids: selection }])}>Group under one letter</button>
+        </div>
+      </div>
+    );
+  }
+
   const units = axis === "x" ? p.cell[2] - p.cell[0] : p.cell[3] - p.cell[1];
   const setting = p.letterSetting;
+  const group = board.groups.find((g) => g.id === p.group);
+  const letter = group ? group.letter : p.letter;
   return (
     <div className="inspector" data-testid="inspector">
       <h3>{p.id}</h3>
+      {group && (
+        <div className="row meta" data-testid="group-info">
+          In group {group.id} ({group.panels.join(", ")}); the letter is the group's.
+          <button onClick={() => commit([{ op: "ungroup", group: group.id }])}>Ungroup</button>
+        </div>
+      )}
       <div className="meta">cell [{p.cell.join(", ")}] · {p.rect[2].toFixed(1)} × {p.rect[3].toFixed(1)} mm
         {p.source.recipe && p.band > 0 && <> · plot {p.rect[2].toFixed(1)} × {(p.rect[3] - p.band).toFixed(1)} mm</>}</div>
       <div className="meta">{p.source.file ?? p.source.recipe ?? "no source"}</div>
@@ -50,9 +72,9 @@ export function Inspector() {
         <select value={setting === "auto" ? "auto" : setting === null ? "none" : "fixed"}
           onChange={(e) => {
             const v = e.target.value;
-            commit([{ op: "set_letter", id: p.id, letter: v === "auto" ? "auto" : v === "none" ? null : p.letter ?? "a" }]);
+            commit([{ op: "set_letter", id: p.id, letter: v === "auto" ? "auto" : v === "none" ? null : letter ?? "a" }]);
           }}>
-          <option value="auto">auto ({p.letter ?? "–"})</option>
+          <option value="auto">auto ({letter ?? "–"})</option>
           <option value="none">none</option>
           <option value="fixed">fixed</option>
         </select>
@@ -114,6 +136,12 @@ function RecipeSection({ p }: { p: Panel }) {
           <textarea rows={3} defaultValue={params} key={`p${p.id}${params}`} data-testid="params-input" spellCheck={false}
             onBlur={(e) => setParams(e.target.value)} />
           {bad && <div className="warn">{bad}</div>}
+          {p.multiples ? <MultiplesEditor p={p} />
+            : p.multiplesItem && p.params && p.multiplesItem in p.params && (
+              <button data-testid="make-multiples" onClick={() => commit([{ op: "set_multiples", id: p.id, item: p.multiplesItem }])}>
+                Make multiples of {p.multiplesItem}
+              </button>
+            )}
           <div className="row">
             <span className="meta" data-testid="render-status">
               {r?.status === "ok" ? `rendered${r.cached ? " (cache)" : ""}${r.seconds !== undefined ? ` in ${r.seconds.toFixed(2)} s` : ""}`

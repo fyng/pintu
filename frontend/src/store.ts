@@ -12,6 +12,8 @@ interface State {
   boards: string[];
   board: BoardView | null;
   selected: string | null;
+  /** Selected panel ids, `selected` first; shift-click adds or removes. */
+  selection: string[];
   preview: Preview | null;
   error: string | null;
   warnings: string[];
@@ -22,6 +24,7 @@ interface State {
   galleryRev: number;
   load: (name: string) => Promise<void>;
   select: (id: string | null) => void;
+  toggleSelect: (id: string) => void;
   commit: (ops: Op[]) => Promise<void>;
   setCellLocal: (id: string, cell: Cell) => void;
   onMessage: (msg: any) => void;
@@ -31,6 +34,7 @@ export const useStore = create<State>((set, get) => ({
   boards: [],
   board: null,
   selected: null,
+  selection: [],
   preview: null,
   error: null,
   warnings: [],
@@ -40,11 +44,17 @@ export const useStore = create<State>((set, get) => ({
 
   load: async (name) => {
     const board = await api.board(name);
-    set({ board, selected: null, preview: null, error: null });
+    set({ board, selected: null, selection: [], preview: null, error: null });
     sendWs({ type: "open", name });
   },
 
-  select: (id) => set({ selected: id }),
+  select: (id) => set({ selected: id, selection: id ? [id] : [] }),
+
+  toggleSelect: (id) => {
+    const cur = get().selection;
+    const selection = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    set({ selection, selected: selection[0] ?? null });
+  },
 
   setCellLocal: (id, cell) => {
     const b = get().board;

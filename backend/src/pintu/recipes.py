@@ -34,12 +34,15 @@ class RenderRequest:
         params: JSON-serializable keyword arguments.
         width_mm: Width of the cell.
         height_mm: Height of the cell below its letter band.
+        multiples: For a multiples panel, the ``mosaic``, ``share`` and ratios
+            passed to the recipe, and the style's ``margins`` for the SDK.
     """
 
     recipe: str
     params: dict = field(default_factory=dict)
     width_mm: float = 0.0
     height_mm: float = 0.0
+    multiples: Optional[dict] = None
 
 
 @dataclass
@@ -87,10 +90,16 @@ def _fmt(v: float) -> str:
     return f"{v:.2f}".rstrip("0").rstrip(".")
 
 
-def output_path(recipe: str, params: dict, w: float, h: float) -> str:
-    """Root-relative ``pintu_out/<recipe>/<param-hash>/<w>x<h>.svg``."""
+def output_path(recipe: str, params: dict, w: float, h: float, multiples: Optional[dict] = None) -> str:
+    """Root-relative ``pintu_out/<recipe>/<param-hash>/<w>x<h>.svg``; the hash covers ``multiples``."""
     safe = recipe.replace(":", ".")
-    return f"{OUT_DIR}/{safe}/{param_hash(params)}/{_fmt(w)}x{_fmt(h)}.svg"
+    key = {**params, "__multiples__": multiples} if multiples else params
+    return f"{OUT_DIR}/{safe}/{param_hash(key)}/{_fmt(w)}x{_fmt(h)}.svg"
+
+
+def request_path(req: RenderRequest) -> str:
+    """``output_path`` of a request."""
+    return output_path(req.recipe, req.params, req.width_mm, req.height_mm, req.multiples)
 
 
 def recipe_python(project: Project) -> str:
@@ -103,16 +112,16 @@ def recipe_python(project: Project) -> str:
 
 def worker_request(project: Project, req: RenderRequest) -> dict:
     """The dict ``worker.render`` takes."""
-    rel = output_path(req.recipe, req.params, req.width_mm, req.height_mm)
     return {"root": str(project.root), "recipe": req.recipe, "params": req.params,
-            "width_mm": req.width_mm, "height_mm": req.height_mm, "out": str(project.root / rel)}
+            "width_mm": req.width_mm, "height_mm": req.height_mm, "multiples": req.multiples,
+            "out": str(project.root / request_path(req))}
 
 
 def to_result(raw: dict, req: RenderRequest, stdout: str = "", stderr: str = "") -> RenderResult:
     """Builds a RenderResult from a ``worker.render`` result dict."""
     return RenderResult(
         ok=raw["ok"],
-        svg=output_path(req.recipe, req.params, req.width_mm, req.height_mm) if raw["ok"] else None,
+        svg=request_path(req) if raw["ok"] else None,
         error=raw["error"], code_hash=raw["code_hash"], summary=raw["summary"],
         stdout=stdout, stderr=stderr, seconds=raw["seconds"])
 

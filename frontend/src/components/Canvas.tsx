@@ -23,6 +23,8 @@ export function Canvas() {
   const board = useStore((s) => s.board)!;
   const selected = useStore((s) => s.selected);
   const select = useStore((s) => s.select);
+  const toggleSelect = useStore((s) => s.toggleSelect);
+  const selection = useStore((s) => s.selection);
   const commit = useStore((s) => s.commit);
   const setCellLocal = useStore((s) => s.setCellLocal);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -48,6 +50,7 @@ export function Canvas() {
   const down = (e: React.PointerEvent, p: Panel, handle: Handle) => {
     if (e.button !== 0) return;
     e.stopPropagation();
+    if (e.shiftKey) return toggleSelect(p.id);
     const at = toMm(e.clientX, e.clientY);
     if (!at) return;
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
@@ -101,7 +104,7 @@ export function Canvas() {
         {board.panels.map((p) => {
           const cell = drag?.id === p.id ? drag.cell : p.cell;
           const [x, y, w, h] = rect(page, cell);
-          const cls = ["panel", p.id === selected && "selected", drag?.id === p.id && (drag.ok ? "dragging" : "invalid")]
+          const cls = ["panel", (p.id === selected || selection.includes(p.id)) && "selected", drag?.id === p.id && (drag.ok ? "dragging" : "invalid")]
             .filter(Boolean)
             .join(" ");
           const top = p.letter ? Math.min(board.preset.letterBand, h / 2) : 0;
@@ -141,6 +144,10 @@ export function Canvas() {
               )}
             </g>
           );
+        })}
+        {board.groups.map((g) => {
+          const [x, y, w, h] = rect(page, g.cell);
+          return <rect key={g.id} className="group-outline" data-group={g.id} x={x - 0.8} y={y - 0.8} width={w + 1.6} height={h + 1.6} />;
         })}
       </svg>
     </div>

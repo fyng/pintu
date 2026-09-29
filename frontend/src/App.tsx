@@ -1,13 +1,27 @@
-import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, DragOverlay, PointerSensor, pointerWithin, rectIntersection, useSensor, useSensors, type CollisionDetection, type DragEndEvent } from "@dnd-kit/core";
 import { useEffect, useState } from "react";
-import { api } from "./api";
+import { api, type Panel } from "./api";
 import { Canvas, canvasCoords } from "./components/Canvas";
 import { FileBrowser } from "./components/FileBrowser";
 import { Gallery } from "./components/Gallery";
 import { Inspector } from "./components/Inspector";
 import { Preview } from "./components/Preview";
 import { dropCell, pitch, rect } from "./geometry";
+import { append, move, place, span } from "./multiples";
 import { connect, useStore } from "./store";
+
+/** The droppable under the pointer, so small inner-grid cells take drops precisely. */
+const collision: CollisionDetection = (args) => {
+  const hits = pointerWithin(args);
+  return hits.length ? hits : rectIntersection(args);
+};
+
+/** The value a linked gallery item gives a multiples panel's cell, if it matches the panel's recipe. */
+function itemValue(p: Panel | undefined, recipe: string | null | undefined, params: Record<string, unknown>): string | null {
+  const m = p?.multiples;
+  if (!m || !recipe || recipe !== p.source.recipe || params[m.item] === undefined) return null;
+  return String(params[m.item]);
+}
 
 export function App() {
   const { board, boards, error, warnings } = useStore();
@@ -48,6 +62,19 @@ export function App() {
     const recipe = data?.recipe as string | null | undefined;
     const params = (data?.params ?? {}) as Record<string, unknown>;
     const start = e.activatorEvent as PointerEvent;
+    const cell = e.over?.data.current as { panel: string; r: number; c: number } | undefined;
+    if (b && cell && String(e.over?.id).startsWith("mcell:")) {
+      // Inner grid of a multiples panel: move or swap, span, or fill from the gallery.
+      const p = b.panels.find((q) => q.id === cell.panel);
+      const m = p?.multiples?.mosaic;
+      if (!m || (data?.panel && data.panel !== cell.panel)) return;
+      const value = itemValue(p, recipe, params);
+      const next = data?.mosaicItem ? move(m, data.mosaicItem, cell.r, cell.c)
+        : data?.spanItem ? span(m, data.spanItem, cell.r, cell.c)
+        : value !== null ? place(m, value, cell.r, cell.c) : m;
+      if (next !== m) commit([{ op: "set_multiples", id: cell.panel, mosaic: next }]);
+      return;
+    }
     if (!b || !path || e.over?.id !== "canvas" || !canvasCoords.toMm) return;
     const mm = canvasCoords.toMm(start.clientX + e.delta.x, start.clientY + e.delta.y);
     if (!mm) return;
@@ -56,12 +83,15 @@ export function App() {
       const [px, py, w, h] = rect(b.page, p.cell);
       return x >= px && x <= px + w && y >= py && y <= py + h;
     });
+    const value = itemValue(hit, recipe, params);
+    // A matching item dropped on a multiples panel joins its mosaic.
+    if (hit?.multiples && value !== null) return void commit([{ op: "set_multiples", id: hit.id, mosaic: append(hit.multiples.mosaic, value) }]);
     if (hit) return void commit([recipe ? { op: "set_recipe", id: hit.id, recipe, params } : { op: "set_source", id: hit.id, file: path }]);
     const ux = Math.floor(x / pitch(b.page.width, b.page.grid[0], b.page.gutter));
     const uy = Math.floor(y / pitch(b.page.height, b.page.grid[1], b.page.gutter));
-    const cell = dropCell(b.page, b.panels.map((p) => p.cell), ux, uy);
+    const free = dropCell(b.page, b.panels.map((p) => p.cell), ux, uy);
     // Linked gallery items become recipe panels, which re-render at the cell size.
-    if (cell) commit([recipe ? { op: "add", cell, recipe, params } : { op: "add", cell, file: path }]);
+    if (free) commit([recipe ? { op: "add", cell: free, recipe, params } : { op: "add", cell: free, file: path }]);
   };
 
   const newBoard = async () => {
@@ -77,7 +107,7 @@ export function App() {
   };
 
   return (
-    <DndContext sensors={sensors} onDragStart={(e) => setDragging(String(e.active.data.current?.label ?? e.active.data.current?.path))} onDragEnd={onDragEnd}
+    <DndContext sensors={sensors} collisionDetection={collision} onDragStart={(e) => setDragging(String(e.active.data.current?.label ?? e.active.data.current?.path))} onDragEnd={onDragEnd}
       onDragCancel={() => setDragging(null)}>
       <div className="app">
         <header>

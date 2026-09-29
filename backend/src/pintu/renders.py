@@ -18,7 +18,9 @@ from typing import Awaitable, Callable, Optional
 from .board import Board
 from .cache import RenderCache
 from .project import Project
-from .recipes import RenderRequest, RenderResult, Runner, code_hash, locate, output_path
+from . import multiples as mult
+from . import style as styles
+from .recipes import RenderRequest, RenderResult, Runner, code_hash, locate, request_path
 
 Key = tuple[str, str]  # (board name, panel id)
 
@@ -43,13 +45,18 @@ class PanelRender:
 
 
 def request_for(board: Board, panel: dict) -> Optional[RenderRequest]:
-    """The render a recipe panel needs below its letter band, or None for other panels."""
+    """The render a recipe panel needs below its letter band, or None for other panels.
+
+    A multiples panel's request carries its mosaic, share and ratios, and the style's margins.
+    """
     src = panel.get("source") or {}
     if "recipe" not in src:
         return None
     _, _, w, h = board.content_rect(panel)
     params = json.loads(json.dumps(src.get("params") or {}, default=str))
-    return RenderRequest(str(src["recipe"]), params, round(w, 2), round(h, 2))
+    m = src.get("multiples")
+    m = {**mult.call_kwargs(m), "margins": styles.margins(board.style)} if isinstance(m, dict) else None
+    return RenderRequest(str(src["recipe"]), params, round(w, 2), round(h, 2), m)
 
 
 class Renders:
@@ -97,7 +104,7 @@ class Renders:
 
     def _latest(self, req: RenderRequest) -> Optional[str]:
         """Newest earlier render of this recipe and params, at any size."""
-        d = (self.project.root / output_path(req.recipe, req.params, 1, 1)).parent
+        d = (self.project.root / request_path(req)).parent
         svgs = sorted(d.glob("*.svg"), key=lambda p: p.stat().st_mtime) if d.is_dir() else []
         return self.project.relative(svgs[-1]) if svgs else None
 
