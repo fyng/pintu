@@ -35,10 +35,10 @@ def project(tmp_path):
     return Project.open(dst)
 
 
-def app_for(project, replies):
+def app_for(project, replies, **kw):
     client = FakeClient(replies)
     llm = LLM(Profile("fake", "http://x/v1", "m", tools=True), client=client)
-    return create_app(project, watch=False, runner=SubprocessRunner(project), llm_factory=lambda: llm), client
+    return create_app(project, watch=False, runner=SubprocessRunner(project), llm_factory=lambda: llm, **kw), client
 
 
 def idle(c, timeout=60):
@@ -137,9 +137,15 @@ def test_mcp_tools_in_process(project):
         try:
             async with Client(mcp_server.build(state)) as c:
                 names = {t.name for t in (await c.list_tools()).tools}
-                assert names == {"get_board", "set_cell", "render_panel", "lint"}
+                assert names == {"get_board", "render_panel", "lint"}
                 board = json.loads(_text(await c.call_tool("get_board", {"board": "eval"})))
                 assert [p["id"] for p in board["panels"]][-1] == "boxes"
+                assert board["panels"][-1]["plot_mm"][1] < board["panels"][-1]["cell_mm"][3]
+                r = await c.call_tool("set_cell", {"board": "eval", "panel": "boxes", "cell": [0, 22, 19, 33]})
+                assert r.is_error
+            async with Client(mcp_server.build(state, layout=True)) as c:
+                names = {t.name for t in (await c.list_tools()).tools}
+                assert names == {"get_board", "set_cell", "render_panel", "lint"}
                 r = await c.call_tool("set_cell", {"board": "eval", "panel": "boxes", "cell": [0, 22, 19, 33]})
                 assert not r.is_error and json.loads(_text(r))["panel"]["cell"] == [0, 22, 19, 33]
                 bad = await c.call_tool("set_cell", {"board": "eval", "panel": "boxes", "cell": [0, 0, 19, 33]})
@@ -161,7 +167,7 @@ def test_mcp_tools_in_process(project):
 
 
 def test_mcp_over_http(project):
-    app, _ = app_for(project, [])
+    app, _ = app_for(project, [], mcp_layout=True)
     with socket.socket() as sk:
         sk.bind(("127.0.0.1", 0))
         port = sk.getsockname()[1]
@@ -189,7 +195,7 @@ def test_mcp_stdio(project):
     from mcp import StdioServerParameters
 
     exe = str(Path(sys.executable).with_name("pintu"))
-    params = StdioServerParameters(command=exe, args=["mcp", "--project", str(project.root)])
+    params = StdioServerParameters(command=exe, args=["mcp", "--project", str(project.root), "--allow-layout"])
 
     async def go():
         async with Client(params) as c:

@@ -181,7 +181,10 @@ letter sits in it. The source fills the area below: a recipe renders at
 `(w, h − band)`, a static file is fitted into it. A panel without a letter gets the
 whole cell. The band is 3.5 mm by default (an 8 pt letter, 2.8 mm, plus a pad), set
 by the style pack (`letter.band_mm`) or per board (`page.letter_band`), and at most
-half the cell height. On a group, the band runs along the top edge of the group's
+half the cell height. The area below the band is the panel's *plot area*. A static
+file keeps its aspect ratio (`contain`, centred), so a file drawn at another aspect
+leaves part of the plot area empty; the board view reports each static file's fit, and
+a badge and the inspector flag a fit below 95% on either axis. On a group, the band runs along the top edge of the group's
 bounding box: the members whose top edge is on it reserve the band, members below it
 get none, and the letter sits on the leftmost member on that edge. When members do
 not share a top edge, only the highest ones reserve the band.
@@ -403,33 +406,48 @@ The protocol is Chat Completions with `tools` and image content parts.
 
 | Action | Starts from | Does |
 |---|---|---|
-| Prompt | Chat panel, or a panel's menu | Any change to a recipe or the layout |
+| Prompt | Chat panel, or a panel's menu | Any change to a plot. A prompt about a static-file panel first turns the file into a recipe (below) |
 | Adapt to size | The size badge (§8), or a resize outside the size range | Edits the recipe to use the new size; adds a size rule rather than hard-coding one size; widens the `@panel` range |
-| Promote to recipe | A gallery item whose script is known (sidecar `script`, else the module of its `recipe`) | Writes a new module `recipes/<name>.py` with a `@panel` recipe that takes (w, h) and draws that item's plot; the script is left as is |
+| Promote to recipe | A gallery item whose script is known (sidecar `script`, else the module of its `recipe`, else a project `.py` file that names the file) | Writes a new module `recipes/<name>.py` with a `@panel` recipe that takes (w, h) and draws that item's plot; the script is left as is |
 
 Each entry point starts a session (below); `pintu agent` and `pintu adapt` run one from
 the command line, and `pintu accept` / `pintu revert` end it.
 
+**Ownership.** The user owns the layout: cells, and so panel sizes. The agent owns the
+plotting code. No session is offered `set_cell`; the agent may call only the tools it
+is offered, and file writes under `boards/` are refused. A prompt about the size or the
+space of a panel therefore changes its plot, never its cell. Figure-level layout
+changes by the agent are a wishlist item (`docs/wishlist.md`).
+
 **Loop:** build the context, call the model, run its tool calls, and return the
-results. Repeat until the model stops or reaches the step cap (default 20).
+results. Repeat until the model stops or reaches the step cap (default 20; 30 for a
+session about a static-file panel).
 
 | Tool | Does |
 |---|---|
 | `read_file`, `list_dir`, `grep` | Read project code, confined to the project root |
 | `edit_file` | Exact string replacement |
-| `render_panel(id, w?, h?)` | Render through the kernel; return lint results, and the image if `vision` |
-| `get_board`, `set_cell(id, cell)` | Read or change the layout |
+| `render_panel(id, w?, h?)` | A recipe panel: render through the kernel; return lint results, and the image if `vision`. A static-file panel: its fit into the plot area, and the file as placed if `vision` |
+| `get_board` | Read the layout: page, pitch, letter band; per panel its letter, cell in grid lines and mm, band, plot area, source and a static file's fit |
 | `run_python(code)` | Run in the recipe kernel; off by default, turned on per project (not built) |
-| `write_file`, `render_recipe(recipe, w, h)` | Promote sessions only: create a new file; render a recipe not on a board |
+| `write_file`, `render_recipe(recipe, w, h)` | Promote sessions and sessions about a static-file panel: create a new file; render a recipe not on a board |
+| `use_recipe(recipe, params?)` | Sessions about a static-file panel: show a recipe in that panel instead of its file, in the same cell; refused if the recipe fails at the plot area |
 
-**Context sent with each prompt:**
+**Context sent with each prompt** about a panel:
 
-- the panel's recipe source,
-- its old and new size,
-- the lint report,
-- the render: the image for vision models, a text summary (axes, text boxes,
-  overflow) for text models,
+- the panel's cell (grid lines and mm), letter band and plot area, and that the cell
+  stays as it is;
+- a recipe panel: its recipe source, old and new size, the lint report, and the
+  render (the image for vision models, a text summary of axes, text boxes and
+  overflow for text models);
+- a static-file panel: the file's size and its fit into the plot area, the image of
+  the file as placed (vision models; the plot area's edge dashed), the script that
+  drew it (sidecar `script`, else a project `.py` file that names the file) with its
+  source, and the steps to a recipe: write it, check it with `render_recipe`, show it
+  with `use_recipe`, then make the change;
 - the style pack's rules.
+
+A prompt about no panel gets the task and the board as `get_board` returns it.
 
 **Safety and undo**
 
@@ -447,10 +465,11 @@ results. Repeat until the model stops or reaches the step cap (default 20).
     change in the board file) is a conflict: the revert changes nothing and reports
     it, unless told to skip or overwrite such files. Accept drops the checkpoint.
 - The chat panel shows the diff (a `patch` part per turn), with Accept and Revert.
-- Edits outside the project root and inside `.git/` are refused.
+- Edits outside the project root, inside `.git/` and under `boards/` are refused.
 
-**MCP server.** Exposes the same operations (`get_board`, `set_cell`,
-`render_panel`, `lint`), plus read-only `pintu://boards` resources, so terminal
+**MCP server.** Exposes the same operations (`get_board`, `render_panel`, `lint`;
+`set_cell` only with `pintu serve --mcp-allow-layout` or `pintu mcp --allow-layout`),
+plus read-only `pintu://boards` resources, so terminal
 agents can drive an open board: over streamable HTTP at `/mcp` on the running
 `pintu serve` (acts on the open board), or over stdio with `pintu mcp --project .`
 (its own headless board state; board edits reach a running server through its file
@@ -511,7 +530,8 @@ fixed.
   session and parts. Tool images are not stored, so a tool part only notes that an
   image went to the model.
 - Entry points:
-  - the prompt box, bound to the selected panel unless unticked;
+  - the prompt box, bound to the selected panel, or the last selected one, unless
+    unticked; a scope line above it names the panel and its plot area, or the whole board;
   - "Prompt…" in the inspector;
   - the size-range badge on recipe panels (bottom left, red when the panel is outside
     the range; a click adapts), and "Adapt to size" in the inspector;
@@ -825,6 +845,8 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
 - Layout templates: a board with empty slots, filled from the gallery.
 - Automatic SSH tunnelling, after a security review.
 - Plotting languages other than Python, through a subprocess recipe contract.
+- The feature wishlist, with figure-level layout optimization by the agent, is
+  `docs/wishlist.md`.
 
 ## 15. Open questions
 

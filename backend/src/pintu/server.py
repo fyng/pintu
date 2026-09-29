@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from watchfiles import PythonFilter, awatch
 
-from . import codegen, gallery, multiples as mult, style as styles
+from . import codegen, fit as fits, gallery, multiples as mult, style as styles
 from .board import Board, BoardError
 from .catalog import Catalog
 from .kernel import KernelRunner
@@ -219,6 +219,7 @@ class State:
                 "file": f,
                 "fileVersion": file_version(self.project, f),
                 "kind": kind if f else None,
+                "fit": self.fit_view(b, p) if "file" in src else None,
                 "group": grp["id"] if grp else None,
                 **({"params": src.get("params") or {}, "render": self.render_view(name, p["id"]),
                     "sizeRange": self.size_range_view(b, p), **self.multiples_view(b, p)}
@@ -241,6 +242,14 @@ class State:
             "groups": groups,
             "warnings": warnings,
         }
+
+    def fit_view(self, b: Board, p: dict) -> Optional[dict]:
+        """How a static file fills its panel's plot area, and the problem if it leaves part empty."""
+        f = fits.panel_fit(self.project, b, p)
+        if f is None:
+            return None
+        return {"natural": f["natural_mm"], "drawn": f["drawn_mm"], "area": f["area_mm"], "fill": f["fill"],
+                "problem": fits.problem(f)}
 
     def multiples_view(self, b: Board, p: dict) -> dict:
         """A recipe panel's multiples state: the recipe's item param, and for a multiples panel its
@@ -410,7 +419,7 @@ def default_llm(profile: Optional[str] = None, config: Optional[str] = None) -> 
 
 
 def create_app(project: Project, dev: bool = False, watch: bool = True, runner: Optional[Runner] = None,
-               llm_factory: Optional[Callable[[], Any]] = None, mcp: bool = True) -> FastAPI:
+               llm_factory: Optional[Callable[[], Any]] = None, mcp: bool = True, mcp_layout: bool = False) -> FastAPI:
     """Builds the app for a project.
 
     Args:
@@ -421,6 +430,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
         runner: Recipe runner; defaults to a ``KernelRunner``.
         llm_factory: Model client for agent sessions; defaults to ``default_llm()``.
         mcp: Serve the MCP server over streamable HTTP at ``/mcp``.
+        mcp_layout: Also serve MCP ``set_cell``, which lets an agent change the layout.
     """
     from . import mcp_server
     from .sessions import SessionError, SessionManager, promote_source
@@ -430,7 +440,7 @@ def create_app(project: Project, dev: bool = False, watch: bool = True, runner: 
     sessions = SessionManager(project, state.renders, llm_factory or default_llm(), notify=state.broadcast,
                               on_files=state.files_changed)
     state.sessions = sessions
-    mcp_app = mcp_server.build(state) if mcp else None
+    mcp_app = mcp_server.build(state, mcp_layout) if mcp else None
     mcp_http = mcp_app.streamable_http_app(streamable_http_path="/mcp") if mcp_app else None
 
     async def watcher() -> None:

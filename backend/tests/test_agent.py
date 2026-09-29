@@ -52,10 +52,10 @@ def project(tmp_path):
     return Project.open(dst)
 
 
-def make(project, replies, tools=True, vision=False, **kw):
+def make(project, replies, native_tools=True, vision=False, panel="boxes", **kw):
     client = FakeClient(replies)
-    llm = LLM(Profile("fake", "http://x/v1", "m", tools=tools, vision=vision), client=client)
-    a = ag.Agent(project, "eval", "boxes", Renders(project, SubprocessRunner(project), ag._no_board), llm, **kw)
+    llm = LLM(Profile("fake", "http://x/v1", "m", tools=native_tools, vision=vision), client=client)
+    a = ag.Agent(project, "eval", panel, Renders(project, SubprocessRunner(project), ag._no_board), llm, **kw)
     return a, client
 
 
@@ -122,7 +122,7 @@ def test_loop_text_mode(project):
         text(f"I will search.\n```tool_call_json\n{call}\n```",
              reasoning='<tool_call>{"name": "edit_file", "arguments": {}}</tool_call>'),
         text("Found it."),
-    ], tools=False)
+    ], native_tools=False)
     res = asyncio.run(a.run("find the recipe"))
     assert res.stopped == "done" and res.tool_calls == ["grep"]
     req = client.requests[-1]
@@ -141,7 +141,7 @@ def test_text_mode_announced_call(project):
              '<arg_key>old_string</arg_key><arg_value>ax.set_ylabel("Response (a.u.)")</arg_value>'
              '<arg_key>new_string</arg_key><arg_value>ax.set_ylabel("Response")</arg_value></tool_call>'),
         text("Renamed the label."),
-    ], tools=False)
+    ], native_tools=False)
     res = asyncio.run(a.run("rename the y label"))
     assert res.stopped == "done" and res.steps == 4 and res.text == "Renamed the label."
     assert res.tool_calls == ["read_file", "edit_file"]
@@ -186,7 +186,7 @@ def test_parse_unrepairable_call_is_error(project):
     assert c.name == "edit_file" and "not valid JSON" in c.error and "line 1 column 49" in c.error
     assert parse_text_calls("```python\nd = {1: 2\n```") == []
     bad = BROKEN.replace('"path": ', '"path" ')
-    a, client = make(project, [text(bad), text("Done.")], tools=False)
+    a, client = make(project, [text(bad), text("Done.")], native_tools=False)
     r = asyncio.run(a.run("halve it"))
     assert r.stopped == "done" and r.steps == 2
     sent = client.requests[1]["messages"][-1]["content"]
@@ -254,12 +254,34 @@ def test_edit_miss_hint():
     assert "[20 more lines]" in out and len(out) < 3000
 
 
-def test_set_cell_and_get_board(project):
+def test_get_board_geometry(project):
     a, _ = make(project, [])
     board = json.loads(a.t_get_board())
-    assert board["page"]["grid"] == [36, 36]
+    assert board["page"]["grid"] == [36, 36] and board["page"]["pitch_mm"] == [5.17, 4.81]
+    assert "pitch" in board["geometry"] and "user owns the layout" in board["layout"]
     boxes = next(p for p in board["panels"] if p["id"] == "boxes")
     assert boxes["cell"] == [0, 22, 18, 33] and boxes["source"]["params"] == {"n": 40}
+    assert boxes["letter"] == "e" and boxes["band_mm"] == 3.5
+    assert boxes["cell_mm"] == [0.0, 105.72, 90.0, 49.86] and boxes["plot_mm"] == [90.0, 46.36]
+
+
+def test_layout_is_the_users(project):
+    a, _ = make(project, [])
+    assert "set_cell" not in a.offered
+    out, _ = asyncio.run(a.call("set_cell", {"id": "boxes", "cell": [0, 22, 36, 33]}))
+    assert out.startswith("error: unknown tool 'set_cell'")
+    board = project.board_path("eval").read_text()
+    out, _ = asyncio.run(a.call("edit_file", {"path": "boards/eval.board.yaml", "old_string": "[0, 22, 18, 33]",
+                                              "new_string": "[0, 22, 36, 33]"}))
+    assert out.startswith("error:") and "user owns the layout" in out
+    out, _ = asyncio.run(a.call("edit_file", {"path": "./boards/eval.board.yaml", "old_string": "x",
+                                              "new_string": "y"}))
+    assert "user owns the layout" in out
+    assert project.board_path("eval").read_text() == board
+
+
+def test_set_cell_when_offered(project):
+    a, _ = make(project, [], tools=ag.TOOLS + ag.LAYOUT_TOOLS)
     out, _ = asyncio.run(a.call("set_cell", {"id": "boxes", "cell": [0, 22, 36, 33]}))
     assert out.startswith("ok") and a.size[0] > 180
     assert Board.load(project.board_path("eval")).panel("boxes")["cell"] == [0, 22, 36, 33]

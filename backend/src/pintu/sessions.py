@@ -24,12 +24,12 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from . import agent as ag, style as styles
+from . import agent as ag, fit as fits, style as styles
 from .board import Board, BoardError
-from .catalog import read_sidecar
+from .catalog import read_sidecar, scripts_for
 from .checkpoints import Checkpoints, Conflict
 from .project import PathError, Project
-from .recipes import locate, module_file, size_range, outside
+from .recipes import locate, size_range, outside
 from .renders import Renders
 
 log = logging.getLogger("pintu")
@@ -431,22 +431,18 @@ class SessionManager:
         s["profile"] = {"name": llm.profile.name, "model": llm.profile.model, "tools": llm.profile.tools,
                         "vision": llm.profile.vision}
         wrapped = _Retrying(llm, lambda st: self._set_status(s, st), self.retry_delays)
-        panel = s["panel"]
-        extra = list(s.get("extra") or [])
-        if panel and s["kind"] != "promote":
+        panel = None if s["kind"] == "promote" else s["panel"]
+        steps = self.max_steps
+        if panel:
             src = Board.load(self.project.board_path(s["board"]), self.pack).panel(panel).get("source") or {}
             if "recipe" not in src:
-                extra.append(f"## Panel\n\nThe prompt is about panel {panel!r} on board {s['board']!r} "
-                             f"(source {json.dumps(src)}).")
-                panel = None
-        if s["kind"] == "promote":
-            panel = None
+                steps += ag.RECIPE_STEPS
         a = ag.Agent(self.project, s["board"], panel, self.renders, wrapped,
                      size=tuple(s["size"]) if s.get("size") and panel else None,
                      old_size=tuple(s["oldSize"]) if s.get("oldSize") and panel else None,
-                     max_steps=self.max_steps, on_event=lambda rec: self._on_event(s, rec),
-                     tools=ag.PROMOTE_TOOLS if s["kind"] == "promote" else ag.TOOLS,
-                     guard=_Guard(self, s), extra=extra)
+                     max_steps=steps, on_event=lambda rec: self._on_event(s, rec),
+                     tools=ag.PROMOTE_TOOLS if s["kind"] == "promote" else None,
+                     guard=_Guard(self, s), extra=list(s.get("extra") or []))
         a.messages = list(self.history.get(s["id"], []))
         s["transcript"] = self.project.relative(a.transcript)
         self.agents[s["id"]] = a
@@ -640,8 +636,9 @@ class SessionManager:
 def promote_source(project: Project, path: str) -> dict:
     """What "Promote to recipe" knows of a gallery item.
 
-    The source script is the sidecar's ``script`` (written by ``pintu_sdk.save``), else
-    the module file of its ``recipe``. Returns ``path``, ``script``, ``params``, ``size``
+    The source script is the first of ``catalog.scripts_for``: the sidecar's ``script``
+    (written by ``pintu_sdk.save``), the module file of its ``recipe``, else a project
+    ``.py`` file that names the file. Returns ``path``, ``script``, ``params``, ``size``
     and the prompt ``fields`` (suggested module and recipe name).
 
     Raises:
@@ -654,23 +651,17 @@ def promote_source(project: Project, path: str) -> dict:
     if not p.is_file():
         raise SessionError(f"no file {path!r}", 404)
     meta = read_sidecar(p) or {}
-    script = meta.get("script")
-    if not script and meta.get("recipe"):
-        f = module_file(project, str(meta["recipe"]))
-        script = project.relative(f) if f else None
-    if not script or not (project.root / script).is_file():
-        raise SessionError(f"the script that drew {path} is not known: its sidecar has no script or recipe")
+    scripts = scripts_for(project, project.relative(p))
+    if not scripts:
+        raise SessionError(f"the script that drew {path} is not known: no sidecar names it, and no project "
+                           ".py file names the file")
+    script = scripts[0]
     params = dict(meta.get("params") or {})
-    size = [float(meta.get("width_mm") or 89), float(meta.get("height_mm") or 55)]
-    stem = re.sub(r"\W+", "_", p.name.split(".")[0]).strip("_").lower() or "plot"
-    fn = stem if stem[0].isalpha() else f"plot_{stem}"
-    module = f"recipes/{fn}.py"
-    k = 2
-    while (project.root / module).exists():
-        module, k = f"recipes/{fn}_{k}.py", k + 1
-    recipe = module[:-3].replace("/", ".") + ":" + fn
-    fields = {"script": script, "path": path, "size": ag.fmt_size(*size), "module_file": module, "fn": fn,
-              "recipe": recipe, "params": f" with params {json.dumps(params)}" if params else "",
+    natural = fits.natural_size(project, project.relative(p)) or (89.0, 55.0)
+    size = [float(meta.get("width_mm") or natural[0]), float(meta.get("height_mm") or natural[1])]
+    name = ag.new_recipe(project, path)
+    fields = {"script": script, "path": path, "size": ag.fmt_size(*size), **name,
+              "params": f" with params {json.dumps(params)}" if params else "",
               "sig": "".join(f", {k}={v!r}" for k, v in params.items())}
     return {"path": path, "script": script, "recipe": meta.get("recipe"), "params": params, "size": size,
             "fields": fields}

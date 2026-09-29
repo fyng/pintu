@@ -66,8 +66,14 @@ export function Inspector() {
         </div>
       )}
       <div className="meta">cell [{p.cell.join(", ")}] · {p.rect[2].toFixed(1)} × {p.rect[3].toFixed(1)} mm
-        {p.source.recipe && p.band > 0 && <> · plot {p.rect[2].toFixed(1)} × {(p.rect[3] - p.band).toFixed(1)} mm</>}</div>
+        {p.band > 0 && <> · plot {p.rect[2].toFixed(1)} × {(p.rect[3] - p.band).toFixed(1)} mm</>}</div>
       <div className="meta">{p.source.file ?? p.source.recipe ?? "no source"}</div>
+      {p.fit && (
+        <div className={p.fit.problem ? "warn" : "meta"} data-testid="fit">
+          File {p.fit.natural[0]} × {p.fit.natural[1]} mm, drawn at {p.fit.drawn[0]} × {p.fit.drawn[1]} mm
+          {p.fit.problem ? `: ${p.fit.problem}. A prompt about this panel makes it a recipe that fills the plot area.` : ""}
+        </div>
+      )}
       <label>
         Letter
         <select value={setting === "auto" ? "auto" : setting === null ? "none" : "fixed"}

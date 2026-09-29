@@ -18,7 +18,7 @@ def _size(text: str) -> tuple[float, float]:
 def _agent_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--project", default=".", help="project folder (default: .)")
     ap.add_argument("--board", required=True, help="board name")
-    ap.add_argument("--panel", required=True, help="panel id with a recipe source")
+    ap.add_argument("--panel", required=True, help="panel id (adapt: a recipe panel)")
     ap.add_argument("--size", type=_size, help="target size WxH in mm (default: the cell size below the letter band)")
     ap.add_argument("--profile", help="profile in llm.toml (default: $PINTU_LLM_PROFILE or the first)")
     ap.add_argument("--llm-config", help="llm.toml path (default: $PINTU_LLM_CONFIG or ~/.config/pintu/llm.toml)")
@@ -51,7 +51,7 @@ async def _run_agent(args, prompt: str | None) -> int:
             return 2
         a = mgr.agents[s["id"]]
         s = await mgr.wait(s["id"])
-        final, w, h = await a.render(args.panel)
+        final, w, h = await a.render(args.panel) if a.has_recipe(args.panel) else (None, 0, 0)
     finally:
         await renders.stop()
     res = s["result"] or {}
@@ -59,10 +59,13 @@ async def _run_agent(args, prompt: str | None) -> int:
     print(f"\n--- {res.get('stopped')} after {s['steps']} steps, {s['usage'].get('total', 0)} tokens, "
           f"{res.get('seconds', 0):.0f} s")
     print(f"session: {s['id']}; transcript: {project.root / s['transcript']}")
-    print(f"final render ({w:g} x {h:g} mm): " + (str(project.root / final.svg) if final.ok else "FAILED"))
+    if final is None:
+        print("final render: none (the panel still shows a static file)")
+    else:
+        print(f"final render ({w:g} x {h:g} mm): " + (str(project.root / final.svg) if final.ok else "FAILED"))
     print(mgr.diff(s["id"])["diff"] or "(no changes)")
     print(f"accept with: pintu accept {s['id']}; revert with: pintu revert {s['id']}")
-    return 0 if final.ok else 1
+    return 0 if final is None or final.ok else 1
 
 
 def _undo(args) -> int:
@@ -120,6 +123,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--dev", action="store_true", help="API only; the Vite dev server serves the frontend")
     s.add_argument("--profile", help="LLM profile for agent sessions (default: $PINTU_LLM_PROFILE or the first)")
     s.add_argument("--llm-config", help="llm.toml path (default: $PINTU_LLM_CONFIG or ~/.config/pintu/llm.toml)")
+    s.add_argument("--mcp-allow-layout", action="store_true", help="let MCP clients change the layout (set_cell)")
     a = sub.add_parser("agent", help="prompt the LLM agent about a panel")
     _agent_args(a)
     a.add_argument("prompt")
@@ -134,6 +138,7 @@ def main(argv: list[str] | None = None) -> None:
             u.add_argument("--force", action="store_true", help="also restore files changed after the agent's edit")
     mc = sub.add_parser("mcp", help="serve the MCP tools over stdio, for terminal agents")
     mc.add_argument("--project", default=".", help="project folder (default: .)")
+    mc.add_argument("--allow-layout", action="store_true", help="let MCP clients change the layout (set_cell)")
     lg = sub.add_parser("login", help="log in to a hosted provider (GitHub device flow)")
     lg.add_argument("provider", choices=["copilot"])
     lg.add_argument("--client-id", help="GitHub OAuth app client id (default: $PINTU_COPILOT_CLIENT_ID)")
@@ -160,7 +165,7 @@ def main(argv: list[str] | None = None) -> None:
         from .project import Project
 
         logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
-        run_stdio(Project.open(args.project))
+        run_stdio(Project.open(args.project), args.allow_layout)
         return
 
     import uvicorn
@@ -171,7 +176,8 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("watchfiles").setLevel(logging.WARNING)
     project = Project.open(args.project, create=True)
-    app = create_app(project, dev=args.dev, llm_factory=default_llm(args.profile, args.llm_config))
+    app = create_app(project, dev=args.dev, llm_factory=default_llm(args.profile, args.llm_config),
+                     mcp_layout=args.mcp_allow_layout)
     where = "API for the Vite dev server" if args.dev else "open"
     print(f"pintu: {project.root} -> {where} http://{args.host}:{args.port}/", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info" if args.dev else "warning")

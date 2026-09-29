@@ -23,6 +23,7 @@ import typst
 
 from . import codegen
 from .project import IMAGE_KINDS, PathError, Project
+from .recipes import OUT_DIR, module_file
 
 DB = ".pintu/catalog.sqlite"
 THUMBS = ".pintu/thumbs"
@@ -80,6 +81,39 @@ def read_sidecar(path: Path) -> Optional[dict]:
     if side.name == SIDECAR and m:
         meta["width_mm"], meta["height_mm"] = float(m[1]), float(m[2])
     return meta
+
+
+def scripts_for(project: Project, rel: str, cap: int = 5) -> list[str]:
+    """Root-relative Python files that may have drawn a file, best first.
+
+    The sidecar's ``script``, else the module of its ``recipe``; without a sidecar, the
+    project's ``.py`` files that name the file (e.g. ``"lines.pdf"``), outside hidden
+    folders and ``pintu_out/``.
+    """
+    try:
+        path = project.resolve(rel)
+    except PathError:
+        return []
+    meta = read_sidecar(path) or {}
+    if meta.get("script") and (project.root / str(meta["script"])).is_file():
+        return [str(meta["script"])]
+    if meta.get("recipe"):
+        f = module_file(project, str(meta["recipe"]))
+        if f:
+            return [project.relative(f)]
+    out = []
+    for f in sorted(project.root.rglob("*.py")):
+        parts = f.relative_to(project.root).parts
+        if any(q.startswith(".") or q in SKIP_DIRS or q == OUT_DIR for q in parts):
+            continue
+        try:
+            if path.name in f.read_text(encoding="utf-8", errors="replace"):
+                out.append(project.relative(f))
+        except OSError:
+            continue
+        if len(out) >= cap:
+            break
+    return out
 
 
 def _sig(p: Optional[Path]) -> str:

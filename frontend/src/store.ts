@@ -13,6 +13,8 @@ interface State {
   boards: string[];
   board: BoardView | null;
   selected: string | null;
+  /** The panel selected last, kept after the selection is cleared; the prompt box binds to it. */
+  lastSelected: string | null;
   /** Selected panel ids, `selected` first; shift-click adds or removes. */
   selection: string[];
   preview: Preview | null;
@@ -35,6 +37,7 @@ export const useStore = create<State>((set, get) => ({
   boards: [],
   board: null,
   selected: null,
+  lastSelected: null,
   selection: [],
   preview: null,
   error: null,
@@ -45,16 +48,16 @@ export const useStore = create<State>((set, get) => ({
 
   load: async (name) => {
     const board = await api.board(name);
-    set({ board, selected: null, selection: [], preview: null, error: null });
+    set({ board, selected: null, lastSelected: null, selection: [], preview: null, error: null });
     sendWs({ type: "open", name });
   },
 
-  select: (id) => set({ selected: id, selection: id ? [id] : [] }),
+  select: (id) => set((s) => ({ selected: id, selection: id ? [id] : [], lastSelected: id ?? s.lastSelected })),
 
   toggleSelect: (id) => {
     const cur = get().selection;
     const selection = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-    set({ selection, selected: selection[0] ?? null });
+    set({ selection, selected: selection[0] ?? null, lastSelected: selection[0] ?? get().lastSelected });
   },
 
   setCellLocal: (id, cell) => {

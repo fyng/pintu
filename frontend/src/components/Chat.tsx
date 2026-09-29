@@ -45,30 +45,38 @@ export function Chat() {
   );
 }
 
-/** Free-text prompt that starts a session, bound to the selected panel unless unticked. */
+/** Free-text prompt that starts a session, bound to the selected (or last selected) panel unless unticked. */
 function PromptBox() {
-  const board = useStore((s) => s.board?.name ?? null);
+  const board = useStore((s) => s.board);
   const selected = useStore((s) => s.selected);
+  const last = useStore((s) => s.lastSelected);
   const llm = useSessions((s) => s.llm);
   const create = useSessions((s) => s.create);
   const [text, setText] = useState("");
   const [bind, setBind] = useState(true);
+  const panel = board?.panels.find((p) => p.id === (selected ?? last)) ?? null;
+  const target = bind ? panel : null;
   const send = async () => {
     if (!text.trim()) return;
-    const s = await create({ kind: "prompt", board, panel: bind ? selected : null, prompt: text });
+    const s = await create({ kind: "prompt", board: board?.name ?? null, panel: target?.id ?? null, prompt: text });
     if (s) setText("");
   };
   return (
     <div className="prompt-box">
-      <textarea rows={3} value={text} placeholder="Ask the agent to change a recipe or the layout" data-testid="prompt-input"
-        onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && send()} />
-      <div className="row">
-        {selected && (
+      <div className={`scope ${target ? "scope-panel" : ""}`} data-testid="prompt-scope" data-panel={target?.id ?? ""}>
+        {panel ? (
           <label className="inline">
             <input type="checkbox" checked={bind} onChange={(e) => setBind(e.target.checked)} data-testid="prompt-bind" />
-            about panel {selected}
+            About panel <b>{panel.id}</b>{panel.letter ? ` (${panel.letter})` : ""}, plot area{" "}
+            {panel.rect[2].toFixed(1)} × {(panel.rect[3] - panel.band).toFixed(1)} mm
           </label>
-        )}
+        ) : null}
+        {!target && <span className="meta">About the whole board{panel ? "" : "; click a panel to ask about its plot"}</span>}
+      </div>
+      <textarea rows={3} value={text} placeholder="Ask the agent to change a plot" data-testid="prompt-input"
+        onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && send()} />
+      <div className="row">
+        <span className="meta">The layout is yours: the agent changes plots, not cells.</span>
         <button onClick={send} disabled={!text.trim() || llm?.configured === false} data-testid="prompt-send">Send</button>
       </div>
     </div>

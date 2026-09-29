@@ -67,6 +67,7 @@ line.fine { stroke: #d5dde8; stroke-width: 0.12; }
 .badge-size rect { fill: #8a94a6; }
 .badge-outside { pointer-events: all; cursor: pointer; }
 .badge-outside rect { fill: #c0392b; }
+.badge-fit rect { fill: #b9770e; }
 .lint { color: #9a5b00; font-size: 11px; margin: 4px 0; padding-left: 16px; max-height: 12em; overflow: auto; }
 .recipe textarea { width: 100%; font-family: monospace; font-size: 12px; }
 .recipe input { width: 100%; font-family: monospace; }
@@ -102,6 +103,8 @@ line.fine { stroke: #d5dde8; stroke-width: 0.12; }
 .chat code { font-size: 11px; }
 .prompt-box { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
 .prompt-box textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.prompt-box .scope { padding: 3px 6px; border-radius: 3px; background: #f1f2f4; }
+.prompt-box .scope-panel { background: #e3edf9; }
 .inline { display: inline-flex; gap: 3px; align-items: center; }
 .sessions { list-style: none; margin: 0; padding: 0; }
 .sessions ul { list-style: none; margin: 0; padding: 0; }

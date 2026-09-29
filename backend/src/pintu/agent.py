@@ -16,8 +16,9 @@ from typing import Any, Callable, Optional, Protocol
 
 import typst
 
-from . import lint as lints, style as styles
+from . import fit as fits, geometry as geo, lint as lints, style as styles
 from .board import Board, BoardError
+from .catalog import scripts_for
 from .llm import text_protocol
 from .project import PathError, Project
 from .recipes import OUT_DIR, RenderRequest, RenderResult, locate, output_path
@@ -25,17 +26,21 @@ from .renders import Renders, request_for
 from .server import apply_ops
 
 MAX_STEPS = 20
+RECIPE_STEPS = 10  # more steps for a session that turns a static file into a recipe
 MAX_IMAGES = 2  # latest renders kept in the history; the endpoint caps 8 per prompt
 IMAGE_PX = 1024
 MAX_READ = 60_000
+MAX_SCRIPT = 20_000
 MAX_GREP = 100
 SKIP_DIRS = {OUT_DIR, "__pycache__", "node_modules"}
 LOG_DIR = ".pintu/agent"
 
 SYSTEM = """\
-You are pintu's figure agent. You edit matplotlib recipes and the board layout of a
-scientific figure. A recipe is a Python function `f(w, h, **params) -> Figure` that draws
-one panel at the cell size w x h in mm; pintu calls it again whenever the panel is resized.
+You are pintu's figure agent. You edit the matplotlib code that draws the panels of a
+scientific figure. The user owns the layout: each panel's grid cell, and so its size, is
+fixed; get_board reads it, and no tool changes it. A recipe is a Python function
+`f(w, h, **params) -> Figure` that draws one panel at exactly its plot area, w x h in mm
+(the cell below its letter band); pintu calls it again whenever the user resizes the panel.
 
 Work in small steps: read the recipe, make exact edits with edit_file, then call
 render_panel to check the result and the lint report. Keep the recipe signature
@@ -70,6 +75,22 @@ script. Create the
 module with write_file, then check it with render_recipe at {size} and at half the width,
 and fix the lint problems. End your final reply with the line `RECIPE: {recipe}`."""
 
+STATIC = """\
+{file} is a static file: it does not change with its cell, and no tool re-runs the script \
+that drew it. To change this plot, turn it into a recipe that draws at the plot area:
+1. Write a new module {module_file} with a recipe `def {fn}(w, h)` that returns a matplotlib \
+Figure of exactly w x h mm (`figsize=(w / 25.4, h / 25.4)`) and draws the same plot as {script} \
+does for {file}. Take only the part of the script that draws this plot; do not edit the script.{helpers}
+2. Decorate it with `@panel(min_size=(w, h), max_size=(w, h))`, literal tuples in mm giving a \
+range of sizes around {size}. Import it with `from pintu_sdk import panel`; the SDK is installed, \
+not in the project.
+3. Check it with render_recipe at {size}.
+4. Call use_recipe with it: the panel then shows the recipe, in the same cell.
+5. Make the requested change in the recipe, and check it with render_panel."""
+
+NO_SCRIPT = ("No sidecar names the script that drew {file}, and no project .py file names it. Find the "
+             "plot's code with grep; if it is not in the project, say so and stop.")
+
 TOOLS = [
     {"type": "function", "function": {
         "name": "read_file", "description": "Read a text file in the project.",
@@ -96,15 +117,22 @@ TOOLS = [
             "required": ["path", "old_string", "new_string"]}}},
     {"type": "function", "function": {
         "name": "render_panel",
-        "description": "Render a recipe panel and return its lint report and layout summary "
-                       "(and the image, for vision models). Defaults to the panel's target size.",
+        "description": "Render a panel. A recipe panel: its lint report and layout summary. A static-file "
+                       "panel: the file as the board draws it and how much of the plot area it fills. "
+                       "Returns the image too, for vision models. Defaults to the panel's plot area.",
         "parameters": {"type": "object", "properties": {
             "id": {"type": "string"}, "w": {"type": "number", "description": "Width in mm"},
             "h": {"type": "number", "description": "Height in mm"}},
             "required": ["id"]}}},
     {"type": "function", "function": {
-        "name": "get_board", "description": "The board: page, grid and panels with cells and sizes.",
+        "name": "get_board",
+        "description": "The board, read-only: page, grid geometry, and each panel's letter, cell, plot area "
+                       "and source (for a static file, how it fills its plot area).",
         "parameters": {"type": "object", "properties": {}}}},
+]
+
+# Offered to no session: the user owns the layout.
+LAYOUT_TOOLS = [
     {"type": "function", "function": {
         "name": "set_cell",
         "description": "Move or resize a panel to grid cell [x0, y0, x1, y1] (grid-line indices).",
@@ -114,7 +142,7 @@ TOOLS = [
             "required": ["id", "cell"]}}},
 ]
 
-PROMOTE_TOOLS = TOOLS + [
+WRITE_TOOLS = [
     {"type": "function", "function": {
         "name": "write_file", "description": "Create a new text file in the project; refuses to overwrite.",
         "parameters": {"type": "object", "properties": {
@@ -129,6 +157,25 @@ PROMOTE_TOOLS = TOOLS + [
             "params": {"type": "object"}},
             "required": ["recipe", "w", "h"]}}},
 ]
+
+PROMOTE_TOOLS = TOOLS + WRITE_TOOLS
+
+# For a session about a static-file panel: write a recipe, then show it in the panel.
+STATIC_TOOLS = TOOLS + WRITE_TOOLS + [
+    {"type": "function", "function": {
+        "name": "use_recipe",
+        "description": "Show a recipe `module:function` in this session's panel in place of its static file. "
+                       "The cell stays as it is; the recipe must render at the plot area.",
+        "parameters": {"type": "object", "properties": {
+            "recipe": {"type": "string"}, "params": {"type": "object"}},
+            "required": ["recipe"]}}},
+]
+
+GEOMETRY = ("Grid line i lies i * pitch_mm from the page's top left. A cell [x0, y0, x1, y1] in grid lines is "
+            "cell_mm = [x, y, w, h] with x = x0 * pitch and w = (x1 - x0) * pitch - gutter (the same for y). "
+            "A lettered panel reserves band_mm at the top of its cell for the letter; its plot fills the rest, "
+            "plot_mm. A static file is fitted into plot_mm with its aspect ratio kept: fit.drawn_mm is its "
+            "drawn size, fit.fill the share of plot_mm it covers per axis.")
 
 
 class Guard(Protocol):
@@ -269,19 +316,65 @@ def local_renders(project: Project) -> Renders:
     return renders
 
 
-def board_summary(b: Board) -> dict:
-    """The board for the agent and MCP: page, grid and panels with cells, sizes and sources."""
+def board_summary(b: Board, project: Optional[Project] = None) -> dict:
+    """The board for the agent and MCP: page and grid geometry, and each panel's letter, cell in
+    grid lines and mm, letter band, plot area and source; with ``project``, a static file's fit."""
     pg = b.page
-    bands = b.bands()
+    bands, letters = b.bands(), b.letters()
+    r = lambda v: round(v, 2)
     panels = []
     for p in b.panels:
-        _, _, w, h = b.content_rect(p, bands[p["id"]])
+        x, y, w, h = pg.rect(p["cell"])
+        band = bands[p["id"]]
         src = dict(p.get("source") or {})
-        panels.append({"id": p["id"], "cell": list(p["cell"]), "size_mm": [round(w, 2), round(h, 2)],
-                       "source": {k: src[k] for k in ("file", "recipe", "params") if k in src}})
-    return {"page": {"width": pg.width, "height": pg.height, "grid": [pg.nx, pg.ny],
-                     "gutter": pg.gutter, "style": b.style},
+        q = {"id": p["id"], "letter": letters[p["id"]], "cell": list(p["cell"]),
+             "cell_mm": [r(x), r(y), r(w), r(h)], "band_mm": r(band), "plot_mm": [r(w), r(h - band)],
+             "source": {k: src[k] for k in ("file", "recipe", "params") if k in src}}
+        f = fits.panel_fit(project, b, p) if project else None
+        if f:
+            q["fit"] = {k: f[k] for k in ("natural_mm", "drawn_mm", "fill")}
+        panels.append(q)
+    return {"page": {"width": pg.width, "height": pg.height, "grid": [pg.nx, pg.ny], "gutter": pg.gutter,
+                     "pitch_mm": [r(geo.pitch(pg.width, pg.nx, pg.gutter)), r(geo.pitch(pg.height, pg.ny, pg.gutter))],
+                     "letter_band_mm": b.letter_band, "style": b.style},
+            "geometry": GEOMETRY,
+            "layout": "The user owns the layout; cells are fixed.",
             "panels": panels}
+
+
+def shared_helpers(project: Project, folder: str = "recipes") -> Optional[str]:
+    """The import line of the module that most recipes in ``folder`` share (at least two), or None.
+
+    For example ``from .common import axes_mm, figure, RC``.
+    """
+    names: dict[str, set[str]] = {}
+    users: Counter = Counter()
+    for f in sorted((project.root / folder).glob("*.py")):
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for mod, items in re.findall(r"^from \.(\w+) import ([\w, ]+)$", text, re.M):
+            users[mod] += 1
+            names.setdefault(mod, set()).update(x.strip() for x in items.split(",") if x.strip())
+    if not users or users.most_common(1)[0][1] < 2:
+        return None
+    mod = users.most_common(1)[0][0]
+    return f"from .{mod} import {', '.join(sorted(names[mod], key=str.lower))}"
+
+
+def new_recipe(project: Project, rel: str) -> dict:
+    """A free module and recipe name for a recipe that redraws file ``rel``.
+
+    Returns:
+        ``fn``, ``module_file`` (``recipes/<fn>.py``, suffixed until free) and ``recipe``.
+    """
+    stem = re.sub(r"\W+", "_", PurePosixPath(rel).name.split(".")[0]).strip("_").lower() or "plot"
+    fn = stem if stem[0].isalpha() else f"plot_{stem}"
+    module, k = f"recipes/{fn}.py", 2
+    while (project.root / module).exists():
+        module, k = f"recipes/{fn}_{k}.py", k + 1
+    return {"fn": fn, "module_file": module, "recipe": module[:-3].replace("/", ".") + ":" + fn}
 
 
 @dataclass
@@ -310,17 +403,22 @@ class Result:
 class Agent:
     """An agent conversation, about a board panel or the project.
 
+    The agent may call only the tools it is offered, and may not write board files: the
+    user owns the layout.
+
     Args:
         project: The project.
-        board: Board name, or None (then ``render_panel``, ``get_board`` and ``set_cell`` fail).
-        panel: Panel id the prompt is about, or None; a panel must have a recipe.
+        board: Board name, or None (then the board tools fail).
+        panel: Panel id the prompt is about, or None. A recipe panel gets its recipe's context;
+            a static-file panel gets its fit, the script that drew it and ``use_recipe``.
         renders: Render path shared with the board (``State.renders`` in the server).
         llm: Model client (anything with ``profile`` and ``chat``).
-        size: Target (w, h) in mm; defaults to the panel's cell size.
-        old_size: Size the recipe was designed for; defaults to the cell size.
+        size: Target (w, h) in mm; defaults to the panel's plot area.
+        old_size: Size the recipe was designed for; defaults to the plot area.
         max_steps: Cap on model calls per ``run``.
         on_event: Called with each transcript record, and ``tool_start`` records, for progress.
-        tools: Tool schemas offered to the model.
+        tools: Tool schemas offered to the model; default ``STATIC_TOOLS`` for a panel without a
+            recipe, else ``TOOLS``.
         guard: Called around each file write.
         extra: More context sections for the first message, as markdown.
     """
@@ -333,12 +431,12 @@ class Agent:
         self.project, self.board_name, self.panel_id = project, board, panel
         self.pack = styles.for_project(project)
         self.renders, self.llm, self.max_steps, self.on_event = renders, llm, max_steps, on_event
-        self.tools, self.guard, self.extra = tools or TOOLS, guard, extra or []
         self.cell_size = self.panel_size(panel) if panel else None
         self.size = tuple(size) if size else self.cell_size
         self.old_size = tuple(old_size) if old_size else self.cell_size
-        if panel:
-            self.recipe(panel)  # fails early for a panel without a recipe
+        default = STATIC_TOOLS if panel and not self.has_recipe(panel) else TOOLS
+        self.tools, self.guard, self.extra = tools or default, guard, extra or []
+        self.offered = {t["function"]["name"] for t in self.tools}
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         self.transcript = project.root / LOG_DIR / f"{stamp}-{panel or 'project'}.jsonl"
         self.last_render: Optional[RenderResult] = None
@@ -355,6 +453,9 @@ class Agent:
         b = self.board()
         _, _, w, h = b.content_rect(b.panel(pid))
         return round(w, 3), round(h, 3)
+
+    def has_recipe(self, pid: str) -> bool:
+        return "recipe" in (self.board().panel(pid).get("source") or {})
 
     def recipe(self, pid: str) -> tuple[str, dict, str]:
         """(recipe ``module:function``, params, root-relative module file) of a panel."""
@@ -387,6 +488,9 @@ class Agent:
             raise ToolError(str(e))
         if write and ".git" in PurePosixPath(self.project.relative(p)).parts:
             raise ToolError("refusing to edit inside .git")
+        if write and p.is_relative_to(self.project.boards_dir):
+            raise ToolError(f"{rel} is under boards/, which holds the layout; the user owns the layout, "
+                            "so no agent tool edits it. Change the plot's code instead")
         return p
 
     def t_read_file(self, path: str) -> str:
@@ -475,14 +579,61 @@ class Agent:
 
     async def t_render_panel(self, id: str, w: Optional[float] = None, h: Optional[float] = None) -> tuple[str, Optional[bytes]]:
         try:
+            src = self.board().panel(id).get("source") or {}
+        except KeyError:
+            raise ToolError(f"no panel {id!r}")
+        if "file" in src:
+            return self.static_report(id)
+        try:
             res, w, h = await self.render(id, w, h)
         except BoardError as e:
             raise ToolError(str(e))
         png = rasterize(self.project.root, res.svg, pack=self.pack) if res.ok and self.llm.profile.vision else None
         return report(res, w, h, self.pack), png
 
+    def static_report(self, pid: str) -> tuple[str, Optional[bytes]]:
+        """A static-file panel as the board draws it: its fit as text, and a PNG for vision models."""
+        b = self.board()
+        p = b.panel(pid)
+        rel = str(p["source"]["file"])
+        _, _, w, h = b.content_rect(p)
+        f = fits.panel_fit(self.project, b, p)
+        if f is None:
+            return f"static file {rel} does not load", None
+        fill = f["fill"]
+        text = (f"static file {rel}, {fmt_size(*f['natural_mm'])}; the board fits it into the {fmt_size(w, h)} "
+                f"plot area with its aspect ratio kept, so it is drawn at {fmt_size(*f['drawn_mm'])}, filling "
+                f"{fill[0]:.0%} of the width and {fill[1]:.0%} of the height. It does not re-render when the "
+                "cell changes.")
+        png = fits.placed_png(self.project, rel, (w, h)) if self.llm.profile.vision else None
+        if png:
+            text += " The image shows the plot area; its edge is dashed."
+        return text, png
+
     def t_get_board(self) -> str:
-        return json.dumps(board_summary(self.board()), default=str)
+        return json.dumps(board_summary(self.board(), self.project), default=str)
+
+    async def t_use_recipe(self, recipe: str, params: Optional[dict] = None) -> str:
+        if not self.panel_id:
+            raise ToolError("this session is not about a panel")
+        if self.has_recipe(self.panel_id):
+            raise ToolError(f"panel {self.panel_id!r} already shows a recipe; edit its code instead")
+        if locate(self.project, recipe) is None:
+            raise ToolError(f"recipe {recipe!r} not found (module:function, importable from the project root)")
+        w, h = self.panel_size(self.panel_id)
+        res = await self.renders.render(RenderRequest(recipe, dict(params or {}), w, h))
+        if not res.ok:
+            raise ToolError(f"use_recipe refused: the recipe fails at the plot area.\n{report(res, w, h, self.pack)}")
+        b = self.board()
+        try:
+            apply_ops(self.project, b, [{"op": "set_recipe", "id": self.panel_id, "recipe": recipe,
+                                         "params": dict(params or {})}])
+        except (BoardError, KeyError, TypeError, ValueError) as e:
+            raise ToolError(f"use_recipe refused: {e}")
+        self._write(self.project.board_path(self.board_name), b.dumps())
+        self.size = self.old_size = self.cell_size = (w, h)
+        return (f"ok: panel {self.panel_id} now shows {recipe} at {fmt_size(w, h)}, in the same cell. "
+                "Edit the recipe and check it with render_panel.\n" + report(res, w, h, self.pack))
 
     def t_set_cell(self, id: str, cell: list) -> str:
         b = self.board()
@@ -499,8 +650,8 @@ class Agent:
     async def call(self, name: str, args: dict) -> tuple[str, Optional[bytes]]:
         """Runs one tool; errors come back as text."""
         fn = getattr(self, f"t_{name}", None)
-        if fn is None:
-            return f"error: unknown tool {name!r}", None
+        if fn is None or name not in self.offered:
+            return f"error: unknown tool {name!r}; the tools are {', '.join(sorted(self.offered))}", None
         try:
             out = fn(**args)
             if hasattr(out, "__await__"):
@@ -527,10 +678,51 @@ class Agent:
             system += "\n" + text_protocol(self.tools)
         return system
 
-    async def context(self, prompt: str) -> list[dict]:
-        """System and first user message: task, recipe source, sizes, lint, render, style rules.
+    def panel_section(self) -> str:
+        """The bound panel's place on the board: cell, letter band and plot area."""
+        b = self.board()
+        p = b.panel(self.panel_id)
+        pg = b.page
+        x, y, w, h = pg.rect(p["cell"])
+        band = b.bands()[p["id"]]
+        letter = b.letters()[p["id"]]
+        return (f"## Panel\n\nBoard {self.board_name!r}, panel {self.panel_id!r}"
+                + (f" (letter {letter})" if letter else " (no letter)")
+                + f", cell {list(p['cell'])} on the {pg.nx} x {pg.ny} grid.\n"
+                f"- Cell: {fmt_size(w, h)} at ({x:.4g}, {y:.4g}) mm on the {fmt_size(pg.width, pg.height)} page. "
+                "The user sets it; it stays as it is.\n"
+                + (f"- Letter band: {band:g} mm at the top of the cell.\n" if band else "")
+                + f"- Plot area{', below the band' if band else ''}: {fmt_size(w, h - band)}. The plot must fill it.")
 
-        Without a panel: the task, the board (if any) and the extra sections.
+    def static_sections(self, text: str) -> list[str]:
+        """What a session about a static-file panel needs: the file's fit (``text``, from
+        ``static_report``), the script that drew it and the way to a recipe."""
+        b = self.board()
+        rel = str(b.panel(self.panel_id)["source"]["file"])
+        f = fits.panel_fit(self.project, b, b.panel(self.panel_id))
+        bad = fits.problem(f)
+        out = [f"## Source\n\n{text[0].upper() + text[1:]}" + (f"\n\nProblem: {bad}." if bad else "")]
+        scripts = scripts_for(self.project, rel)
+        if not scripts:
+            return out + [NO_SCRIPT.format(file=rel)]
+        name = new_recipe(self.project, rel)
+        shared = shared_helpers(self.project) if name["module_file"].startswith("recipes/") else None
+        helpers = f" Other recipes here share `{shared}`; use it too." if shared else ""
+        out.append("## How to change it\n\n" + STATIC.format(file=rel, script=scripts[0], size=fmt_size(*self.size),
+                                                              helpers=helpers, **name)
+                   + (f"\n\nOther files that name {rel}: {', '.join(scripts[1:])}." if scripts[1:] else ""))
+        code = (self.project.root / scripts[0]).read_text(encoding="utf-8", errors="replace")
+        if len(code) > MAX_SCRIPT:
+            code = code[:MAX_SCRIPT] + f"\n[... truncated at {MAX_SCRIPT} chars; read_file has the rest]"
+        return out + [f"## Script ({scripts[0]})\n\n```python\n{code}\n```"]
+
+    async def context(self, prompt: str) -> list[dict]:
+        """System and first user message.
+
+        With a recipe panel: the task, the panel's cell and plot area, recipe source, sizes,
+        lint and render. With a static-file panel: the task, the cell and plot area, the file's
+        fit, the script that drew it, and the file as placed. Without a panel: the task and
+        the board (if any). Then the extra sections.
         """
         if not self.panel_id:
             parts = [f"## Task\n\n{prompt}"]
@@ -539,15 +731,25 @@ class Agent:
             text = "\n\n".join(parts + self.extra)
             return [{"role": "system", "content": self._system()},
                     {"role": "user", "content": [{"type": "text", "text": text}]}]
+        if not self.has_recipe(self.panel_id):
+            src = self.board().panel(self.panel_id).get("source") or {}
+            fit_text, png = self.static_report(self.panel_id) if "file" in src else ("", None)
+            body = self.static_sections(fit_text) if "file" in src else [
+                "## Source\n\nThe panel has no source yet. To draw it, write a recipe module with write_file, "
+                "check it with render_recipe at the plot area, and show it with use_recipe."]
+            text = "\n\n".join([f"## Task\n\n{prompt}", self.panel_section(), *body, *self.extra])
+            content: list[dict] = [{"type": "text", "text": text}]
+            if png:
+                content.append(image_part(png))
+            return [{"role": "system", "content": self._system()}, {"role": "user", "content": content}]
         recipe, params, rel = self.recipe(self.panel_id)
         res, w, h = await self.render(self.panel_id)
         system = self._system()
         text = "\n\n".join([
             f"## Task\n\n{prompt}",
-            f"## Panel\n\nBoard {self.board_name!r}, panel {self.panel_id!r}, recipe `{recipe}`"
-            + (f" with params {json.dumps(params)}" if params else "")
-            + f".\nOld size: {fmt_size(*self.old_size)}. New size: {fmt_size(*self.size)}."
-            + f" Size on the board (below the letter band): {fmt_size(*self.cell_size)}.",
+            self.panel_section(),
+            f"Recipe `{recipe}`" + (f" with params {json.dumps(params)}" if params else "")
+            + f". Old size: {fmt_size(*self.old_size)}. New size: {fmt_size(*self.size)}.",
             f"## Recipe source ({rel})\n\n```python\n{self.t_read_file(rel)}\n```",
             f"## Current render at the new size\n\n{report(res, w, h, self.pack)}",
             *self.extra,
@@ -609,7 +811,7 @@ class Agent:
                        "tool_calls": [{"id": c.id, "name": c.name, "arguments": c.arguments, "error": c.error}
                                       for c in reply.tool_calls]})
             if not reply.tool_calls:
-                if prof.tools or nudged or {"edit_file", "write_file", "set_cell"} & set(called):
+                if prof.tools or nudged or {"edit_file", "write_file", "set_cell", "use_recipe"} & set(called):
                     stopped = "done"
                     break
                 nudged = True  # text mode: a reply that announces a call but writes none
