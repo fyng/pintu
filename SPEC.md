@@ -608,9 +608,14 @@ eval runs. No stack change.
     held none, and tasks 3–5 hit a stopped server (503). Fixed without a live
     repro: text mode also takes server-parsed `tool_calls` and GLM's
     `<arg_key>` form, and a reply with no call before any edit gets one reminder.
-  - [ ] Eval on a hosted model. GitHub Copilot provider built (branch `copilot`,
-    unit tests with mocked HTTP); not yet run against the live API. Eval pending
-    the user's login (`pintu login copilot`, docs/dev.md).
+  - [ ] Eval on a hosted model. GitHub Copilot provider built and logged in with
+    the user's own GitHub App. The login lists only gpt-4o, gpt-4o-mini,
+    gpt-41-copilot and gpt-3.5, and every image part is rejected ("image media
+    type not supported"). gpt-4o with `vision = false`: 5 of 5 automatic passes
+    in 10–27 s per task, but 2 of 5 accepted by review (tasks 2 and 5). Task 4
+    swapped the axis labels and tasks 1 and 3 barely adapted or overlapped the
+    data; the automatic checks missed all three. Pending a stronger hosted
+    model with vision.
   - [x] Merge into `prototype`; `render_panel` renders through the kernel
     (`Renders.render`, the board's path); the CLI builds its own
     (`agent.local_renders`).
