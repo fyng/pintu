@@ -478,18 +478,24 @@ pintu/
 
 ### 12.5 Status (2026-09-29)
 
-Branch `prototype` holds P1, P2 and the P4 spike (merged from `p4`). No review
-gate yet.
+Branch `prototype` holds P1, P2 and the P4 spike (merged from `p4`).
+
+**Gate (2026-09-29):** P1 and P2 accepted. P3 deferred; the build starts
+without it, and P3 must pass before B4. P4 is reviewed once the hosted-model
+eval runs. No stack change.
 
 **Prototype steps**
 
 - [x] P1 Layout loop. Fig. 1–3 wireframes rebuilt (23 panels, error < 1e-13 mm);
   geometry matches `fig-span` to 0.01 mm for every n dividing 36; preview median
   30–70 ms, max 362 ms (1 of 90 edits over budget, on the network filesystem).
+  Accepted: the 300 ms budget is advisory.
 - [x] P2 Resize loop. Kernel runner, render cache, recipe watch, "Open code",
   `pintu-sdk` with `cache`. Warm resize median 209–387 ms; recipe save to board
-  re-rendered median 808 ms. Measured with a scripted file write, not VS Code.
-- [ ] P3 Packaging spike. Deferred; no Rust toolchain on the dev host.
+  re-rendered median 808 ms. Measured with a scripted file write, not VS Code;
+  accepted as is.
+- [ ] P3 Packaging spike. Deferred at the gate; no Rust toolchain on the dev
+  host. Must pass before B4.
 - [ ] P4 Agent spike, in progress.
   - [x] LLM client and profiles, agent loop, tools (without `run_python`),
     `pintu agent` and `pintu adapt` commands, eval harness with 5 tasks.
