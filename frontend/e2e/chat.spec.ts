@@ -148,3 +148,30 @@ test("size badge outside the range: Adapt to size, Accept", async ({ page }) => 
   await expect(page.getByTestId("turn")).toHaveAttribute("data-state", "accepted");
   await expect(badge).toHaveAttribute("data-outside", "false", { timeout: 15_000 });
 });
+
+test("a static file that leaves its plot area empty; the prompt box keeps the last panel in scope", async ({ page, request }) => {
+  if (!(await request.get("/api/boards/static")).ok()) {
+    expect((await request.post("/api/boards", { data: { name: "static" } })).ok()).toBe(true);
+    const r = await request.post("/api/boards/static/ops", { data: { ops: [
+      { op: "set_page", width: 183, height: 120 },
+      { op: "add", id: "narrow", cell: [0, 0, 9, 18], file: "plots/lines.pdf" },
+      { op: "add", id: "wide", cell: [18, 0, 36, 18], file: "plots/scatter.svg" },
+    ] } });
+    expect(r.ok()).toBe(true);
+  }
+  await page.goto("/?board=static");
+  await expect(page.locator('[data-panel="narrow"] [data-testid=fit-badge]')).toContainText("fills");
+  await expect(page.locator('[data-panel="wide"] [data-testid=fit-badge]')).toHaveCount(0);
+  await selectPanel(page, "narrow");
+  await expect(page.getByTestId("fit")).toContainText("height is empty");
+
+  await page.getByTestId("tab-chat").click();
+  if (await session(page).isVisible()) await page.getByTestId("session-back").click();
+  const scope = page.getByTestId("prompt-scope");
+  await expect(scope).toHaveAttribute("data-panel", "narrow");
+  await page.keyboard.press("Escape");
+  await expect(scope).toHaveAttribute("data-panel", "narrow");
+  await page.getByTestId("prompt-bind").uncheck();
+  await expect(scope).toHaveAttribute("data-panel", "");
+  await expect(scope).toContainText("About the whole board");
+});

@@ -1,6 +1,6 @@
 import { useDroppable } from "@dnd-kit/core";
 import { useEffect, useRef, useState } from "react";
-import { api, type Panel, type RenderStatus, type SizeRange } from "../api";
+import { api, type Fit, type Panel, type RenderStatus, type SizeRange } from "../api";
 import { coarseLines, dragCell, lineAt, overlaps, rect, sameCell, type Cell, type Handle } from "../geometry";
 import { useSessions } from "../sessions";
 import { useStore } from "../store";
@@ -128,6 +128,7 @@ export function Canvas() {
               </svg>
               {p.render && (p.render.status !== "ok" || !!p.render.lint?.length) && <RenderBadge x={x + w} y={y} status={p.render} />}
               <rect className="body" x={x} y={y} width={w} height={h} onPointerDown={(e) => down(e, p, "move")} />
+              {p.fit?.problem && !drag && <FitBadge x={x} y={y + h} fit={p.fit} />}
               {p.sizeRange && !drag && <SizeBadge x={x} y={y + h} range={p.sizeRange}
                 adapt={() => useSessions.getState().create({ kind: "adapt", board: board.name, panel: p.id })} />}
               {(["n", "s", "e", "w", "ne", "nw", "se", "sw"] as Handle[]).map((hd) => {
@@ -187,6 +188,19 @@ function RenderBadge({ x, y, status }: { x: number; y: number; status: RenderSta
 }
 
 const fmt = (s: [number, number] | null) => (s ? `${s[0]}×${s[1]}` : "–");
+
+/** How much of the plot area a static file fills, at a panel's bottom-left corner, when it leaves part empty. */
+function FitBadge({ x, y, fit }: { x: number; y: number; fit: Fit }) {
+  const label = `fills ${Math.round(Math.min(...fit.fill) * 100)}%`;
+  const bw = label.length * 1.35 + 2;
+  return (
+    <g className="badge badge-fit" data-testid="fit-badge">
+      <title>{`File ${fmt(fit.natural)} mm, drawn at ${fmt(fit.drawn)} mm: ${fit.problem}`}</title>
+      <rect x={x + 0.5} y={y - 3.9} width={bw} height={3.4} rx={0.8} />
+      <text x={x + 0.5 + bw / 2} y={y - 1.5}>{label}</text>
+    </g>
+  );
+}
 
 /** The recipe's `@panel` size range at a panel's bottom-left corner; outside it, a click adapts the recipe. */
 function SizeBadge({ x, y, range, adapt }: { x: number; y: number; range: SizeRange; adapt: () => void }) {

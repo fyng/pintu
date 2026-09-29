@@ -118,7 +118,7 @@ panel or file) or 409 (busy, or a revert conflict).
 {
   "kind": "prompt",        // prompt | adapt | promote
   "board": "fig",          // prompt: optional; adapt: required
-  "panel": "km",           // prompt: optional (binds the session); adapt: a recipe panel
+  "panel": "km",           // prompt: optional (binds the session; any panel); adapt: a recipe panel
   "prompt": "…",           // prompt: the first prompt (without one, no turn starts);
                            // adapt/promote: optional extra instructions appended to the template
   "size": [178, 55],       // adapt: target size in mm (default: the panel's size below its letter band)
@@ -133,8 +133,10 @@ Without an LLM profile, `POST /api/sessions` with a prompt (and any adapt or pro
 400 (`cannot start the agent: …`) and no session is created; `GET /api/llm` tells the chat
 panel so beforehand.
 
-A prompt about a panel whose source is a static file runs without the recipe context; the
-panel is named in the prompt. The 409 for a busy panel has
+A prompt about a panel whose source is a static file gets the file's fit into the plot area,
+the script that drew it, and the tools `write_file`, `render_recipe` and `use_recipe`, so the
+agent can turn the file into a recipe in the same cell (SPEC §9). No session gets `set_cell`.
+The 409 for a busy panel has
 `detail: {"message": "busy", "sessionId": "<the busy one>"}`.
 
 **Accept** drops the checkpoints and keeps the files. **Revert** restores, newest turn
@@ -150,7 +152,7 @@ no longer what the agent left is a `Conflict`:
 
 Staged revert is `revert` with `turn`: it undoes turns n, n+1, … and leaves earlier ones
 open. Accept and revert are refused (409) while the session is busy. The board file counts
-as a file: a revert of an agent's `set_cell` conflicts if the user edited the layout since.
+as a file: a revert of an agent's `use_recipe` conflicts if the user edited the board since.
 
 ### Board changes
 
@@ -158,12 +160,15 @@ as a file: a revert of an agent's `set_cell` conflicts if the user edited the la
 `adaptSessions: [sessionId…]`: the "Adapt to size" sessions it started. One starts for
 each recipe panel whose size (below its letter band) changed and now lies outside the
 recipe's `@panel(min_size, max_size)`, unless the panel has a busy session. If no LLM
-profile is set up, none starts (logged). MCP `set_cell` does the same.
+profile is set up, none starts (logged). MCP `set_cell` (when served) does the same.
 
 Board view (`GET /api/boards/{name}` and the `board` WebSocket message): each recipe panel
 has `sizeRange: {"min": [w, h] | null, "max": [w, h] | null, "outside": bool}`, or `null`
 when the recipe declares no range. `outside` drives the size badge and its "Adapt to size"
-button (`POST /api/sessions {"kind": "adapt", "board", "panel"}`).
+button (`POST /api/sessions {"kind": "adapt", "board", "panel"}`). Each static-file panel
+has `fit: {"natural": [w, h], "drawn": [w, h], "area": [w, h], "fill": [fx, fy], "problem":
+str | null}` (sizes in mm; `fill` is drawn over area per axis), or `null` if the file does
+not load; `problem` is set when `fill` is below 0.95 on either axis.
 
 ## WebSocket
 
@@ -208,14 +213,15 @@ Accept or revert deletes the ref or folder.
 
 | Kind | Prompt |
 |---|---|
-| `prompt` | The user's text. With a recipe panel: the task, recipe source, sizes, lint and render (as `pintu agent`). |
+| `prompt` | The user's text, and the panel's cell, letter band and plot area. With a recipe panel: the recipe source, sizes, lint and render (as `pintu agent`). With a static-file panel: the file's fit, the file as placed, its script and `agent.STATIC`, the steps to a recipe in the same cell. |
 | `adapt` | `agent.ADAPT` with the old and new size; plus the `@panel` range and, if the new size lies outside it, a request to widen it. |
 | `promote` | `agent.PROMOTE`: write a new module `recipes/<stem>.py` with `def <stem>(w, h, **params)` decorated with `@pintu_sdk.panel(min_size, max_size)`, drawing the plot of the given gallery item; tools add `write_file` and `render_recipe`; the reply ends with `RECIPE: module:function`, which becomes `result.recipe` if it exists. |
 
 **Promote: the source script** of a gallery item is its sidecar's `script` field (a
 root-relative path); `pintu_sdk.save(fig, path, script=None)` fills it with the running
 `__main__` file when that is under the project root. Without it, the module file of the
-sidecar's `recipe` is used. Otherwise the item cannot be promoted (400). The chat panel can
+sidecar's `recipe` is used, else the first project `.py` file (outside hidden folders and
+`pintu_out/`) whose text names the file. Otherwise the item cannot be promoted (400). The chat panel can
 call `GET /api/promote/source?path=` to show or hide "Promote to recipe". To place the
 result, add a panel with `{"op": "add", "cell": […], "recipe": result.recipe}`.
 
@@ -225,10 +231,10 @@ Tools on the board, for terminal agents (Claude Code, Codex, opencode):
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `get_board` | `board` | page, grid, gutter; panels with `cell`, `size_mm`, `source` |
-| `set_cell` | `board`, `panel`, `cell: [x0, y0, x1, y1]` | `{panel, warnings, adaptSessions}` |
-| `render_panel` | `board`, `panel`, `w?`, `h?`, `image?` | render report (status, lint, layout summary), plus a PNG if `image` |
-| `lint` | `board`, `panel?` | `{board, panels: {id: [{rule, message}]}}` |
+| `get_board` | `board` | `page` (size, grid, gutter, `pitch_mm`, `letter_band_mm`), `geometry` (how cells map to mm), `layout`; panels with `letter`, `cell`, `cell_mm`, `band_mm`, `plot_mm`, `source` and, for a static file, `fit` (`natural_mm`, `drawn_mm`, `fill`) |
+| `set_cell` | `board`, `panel`, `cell: [x0, y0, x1, y1]` | `{panel, warnings, adaptSessions}`; served only with `pintu serve --mcp-allow-layout` or `pintu mcp --allow-layout` |
+| `render_panel` | `board`, `panel`, `w?`, `h?`, `image?` | render report (status, lint, layout summary), plus a PNG if `image`; for a static file, its fit, and the file as placed if `image` |
+| `lint` | `board`, `panel?` | `{board, panels: {id: [{rule, message}]}}`; a static file under-filling its plot area gives rule `fit` |
 
 Resources: `pintu://boards` (board names), `pintu://boards/{name}` (as `get_board`).
 

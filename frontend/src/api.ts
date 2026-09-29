@@ -12,6 +12,8 @@ export interface Panel {
   file: string | null;
   fileVersion: number | null;
   kind: "vector" | "raster" | null;
+  /** How a static file fills the plot area (static-file panels only; null if the file does not load). */
+  fit?: Fit | null;
   /** The group the panel belongs to, if any. */
   group: string | null;
   /** Recipe panels only. */
@@ -22,6 +24,17 @@ export interface Panel {
   multiples?: Multiples;
   /** The recipe's `@panel` size range (recipe panels only; null without one). */
   sizeRange?: SizeRange | null;
+}
+
+/** A static file's contain fit into its plot area, sizes in mm. */
+export interface Fit {
+  natural: [number, number];
+  drawn: [number, number];
+  area: [number, number];
+  /** Drawn size over the plot area, per axis, 0 to 1. */
+  fill: [number, number];
+  /** How much of the plot area stays empty, when that is a problem. */
+  problem: string | null;
 }
 
 export interface SizeRange {
