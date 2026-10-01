@@ -9,9 +9,8 @@
   (at: a * p, len: (b - a) * p - gutter)
 }
 
-// `fig-span` from academic-design-system (formats/publication/fig.typ): `n`
-// equal units of a span with gutters between them; the `k` units from unit `i`.
-#let fig-span(of, n, i, k: 1, gutter: 3mm) = {
+// `n` equal units of a span with gutters between them; the `k` units from unit `i`.
+#let even-span(of, n, i, k: 1, gutter: 3mm) = {
   let s = if type(of) == length { (at: 0mm, len: of) } else { of }
   let u = (s.len - (n - 1) * gutter) / n
   (at: s.at + i * (u + gutter), len: k * u + (k - 1) * gutter)

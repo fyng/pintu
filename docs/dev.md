@@ -105,15 +105,12 @@ written.
 ## Tests
 
 ```sh
-cd backend && uv run pytest              # geometry (incl. fig-span via typst), board, codegen, files, API,
+cd backend && uv run pytest              # geometry (incl. even-span via typst), board, codegen, files, API,
                                          # kernel runner, render cache, recipe watch, agent
                                          # sdk: uv run pytest ../sdk/tests
 cd frontend && npm test                  # vitest: snapping and drop geometry
 cd frontend && npm run build && npm run e2e   # Playwright: layout edits, preview latency, recipe resize/save/open-code
 ```
-
-The geometry test also checks against `../academic-design-system/formats/publication/fig.typ`
-when that repo sits next to this one; otherwise it checks the vendored copy only.
 
 `backend/scripts/latency.py <url> <board> <panel>` measures edit → preview latency against a
 running server.
