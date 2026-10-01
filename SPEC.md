@@ -49,7 +49,8 @@ touches stage 1 only through the gallery.
 - **Platforms:** desktop installers for Windows and macOS; a headless server for
   Linux and remote machines.
 - **Python only** for plot code.
-- **Independent repo.** pintu works without the `kare` design guide. Journal
+- **Independent repo.** pintu works without any design system. It reads external
+  design systems and never writes to them (`docs/design-systems.md`). Journal
   presets, letters, fonts and lint rules come from style packs (§10). Users may
   bring their own plotting code; the LLM reads it like any other code.
 - **Snap-only grid,** fine enough to feel smooth (§6).
@@ -148,7 +149,8 @@ per axis (default `N = 36`, set per board).
 **Grid lines.** Line `i` sits at `i · p`, with pitch `p = (L + g) / N` and `L` the
 page width or height. A panel between lines `a` and `b` starts at `a · p` and is
 `(b − a) · p − g` long. For any division `n` that divides `N`, this gives the same
-cells as `fig-span(L, n, i, k)` in `kare`. `N = 36` covers halves,
+cells as dividing `L` into `n` equal units with gutters `g` between them
+(`even-span(L, n, i, k)`: the `k` units from unit `i`). `N = 36` covers halves,
 thirds, quarters, sixths, ninths, twelfths and eighteenths, so thirds nested in thirds
 land exactly. One unit is 5.2 mm at 183 mm. Fifths come from a multiples panel's
 inner grid (§8).
@@ -567,12 +569,8 @@ board preset's merged values. `pintu stylepack check <dir>` validates a pack
 and prints its presets, warnings and rules text. A contract fixture
 (`backend/tests/fixtures/stylepacks/contract/`) uses every key. `examples/stylepacks/strict/` mirrors a design
 system's rules (5–6 pt tick labels, 1–3 pt ticks, 0.25–1 pt axes).
-**kare.** `kare` (github.com/fyng/kare, MIT) is a pure design guide: it has
-no knowledge of pintu and holds no plotting code. pintu implements kare's style
-itself, as a `kare` pack and matplotlib settings in pintu, cited to a kare
-version. Tests check the pack against a kare checkout when one is present.
-kare adopts pintu's letter model: a 5 mm letter band that the plot never
-enters.
+**Design systems.** pintu ships no pack for any design system. A user drafts a
+pack from one into their own data folder; `docs/design-systems.md` §8.
 
 ## 11. Distribution
 
@@ -606,7 +604,7 @@ A review gate sits between the two.
 
 | Step | Proves | Delivers | Exit test |
 |---|---|---|---|
-| P1 Layout loop | Snap-grid editing feels smooth; Typst preview is fast enough; the grid matches `fig-span` | Headless backend, browser canvas, board YAML, Typst preview, static panels, file browser | Rebuild the OncoTraj Fig. 1–3 wireframe layouts from static PDFs; preview updates in < 300 ms; the geometry test matches `fig-span` to 0.01 mm |
+| P1 Layout loop | Snap-grid editing feels smooth; Typst preview is fast enough; the grid matches the even division | Headless backend, browser canvas, board YAML, Typst preview, static panels, file browser | Rebuild the OncoTraj Fig. 1–3 wireframe layouts from static PDFs; preview updates in < 300 ms; the geometry test matches the even division to 0.01 mm |
 | P2 Resize loop | Resize → re-render is fast and reliable in a real env; code and board stay in sync | Kernel runner, plain-function recipes, render cache, file watch, "Open code" | Port 3 OncoTraj plots (KM, dumbbell, timeline) as recipes; warm re-render < 2 s; saving a recipe in VS Code re-renders the board in < 3 s |
 | P3 Packaging spike (parallel with P2) | Users can install the app | Tauri shell, uv bootstrap, unsigned CI builds | A tester installs P1 on clean Windows 11 and macOS (arm64) machines from the README alone, in < 10 min |
 | P4 Agent spike | Adapt by meaning works through an open endpoint | Minimal loop with read, edit and render tools; no chat UI (a CLI command or a panel button) | 3 of 5 set tasks (for example: double the width → add a column; halve the width → reflow) give an accepted diff on a vLLM model and on one hosted model |
@@ -630,7 +628,7 @@ before the build starts:
 | Step | Delivers | Exit test |
 |---|---|---|
 | B1 | Gallery and catalog, sidecars, parameter filters, multiples panels, groups | Browse 300 patient timelines; drag 3 into one multiples panel and reorder them |
-| B2 | Lint, style packs, the `kare` pack | Design-system rules flag a panel with 4 pt ticks |
+| B2 | Lint, style packs | Design-system rules flag a panel with 4 pt ticks |
 | B3 | Chat panel with session manager (list, status, stop, trace; §9 "Harness choice"), checkpoints, diff view, Promote to recipe, MCP server | A full stage 1 → 3 loop on one figure without leaving pintu |
 | B4 | Release hardening: first-run wizard, updater, docs, CI screenshot tests on WebKit and WebView2 | v1.0 tagged; a new user builds a figure from the example project |
 | B5 | Layout templates | – |
@@ -681,7 +679,7 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
 **Prototype steps**
 
 - [x] P1 Layout loop. Fig. 1–3 wireframes rebuilt (23 panels, error < 1e-13 mm);
-  geometry matches `fig-span` to 0.01 mm for every n dividing 36; preview median
+  geometry matches the even division to 0.01 mm for every n dividing 36; preview median
   30–70 ms, max 362 ms (1 of 90 edits over budget, on the network filesystem).
   Accepted: the 300 ms budget is advisory.
 - [x] P2 Resize loop. Kernel runner, render cache, recipe watch, "Open code",
@@ -759,8 +757,7 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
   `examples/stylepacks/strict/`: a recipe with 4 pt tick labels is flagged
   (`tick-labels`, `font`), one with 4 pt tick marks (`tick-length`); a clean
   recipe passes. Preview latency on the demo boards unchanged (median 30–39 ms
-  against 40–44 ms before, same host). The `kare` pack, built in pintu from
-  kare's reference, is pending (§10).
+  against 40–44 ms before, same host).
 - [x] B3 Chat panel, sessions, checkpoints, Promote to recipe, MCP server.
   - [x] Backend: session manager (parts, status, abort, children, persistence),
     checkpoints on a hidden git ref or `.pintu/` copies (P4's clean-tree rule is
@@ -794,14 +791,15 @@ the hosted-model half moves to §14 (OpenRouter). No stack change.
     A first run stalled after the placement: the page kept a stale render badge
     while the server showed the render ok. The rerun passed, and the stall has not
     been reproduced.
-- [ ] kare integration (§10). Phase A, pack schema without a kare checkout,
-  done: `[pack] schema` and `source`; `pintu stylepack check` and the notes cap;
-  tests find kare via `PINTU_KARE_DIR`, `../kare`, then `../academic-design-system`;
-  per-preset `fonts`, `lint` and `matplotlib` overrides; `letter.color` and
-  `font`; `[matplotlib] rc` in the kernel; `[margins.scale]`. The default pack's
-  board Typst, compiled SVG and PDF, render cache keys and output paths are
-  unchanged; preview latency unchanged (median 28–32 ms both before and after).
-  Phase B, the `kare` pack and its drift test, waits for kare's MIT licence.
+- [x] Style pack schema, phase A: `[pack] schema` and `source`; `pintu stylepack
+  check` and the notes cap; per-preset `fonts`, `lint` and `matplotlib`
+  overrides; `letter.color` and `font`; `[matplotlib] rc` in the kernel;
+  `[margins.scale]`. The default pack's board Typst, compiled SVG and PDF, render
+  cache keys and output paths are unchanged; preview latency unchanged (median
+  28–32 ms both before and after).
+- [x] C1 Cleanup (`docs/design-systems.md` §11): no test, code or doc depends on a
+  design system checkout.
+- [ ] D1–D7 Design systems (`docs/design-systems.md` §10).
 
 **Known bugs and gaps**
 

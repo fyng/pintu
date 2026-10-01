@@ -2,7 +2,6 @@ import json
 
 import pytest
 import typst
-from conftest import KARE_SKIP, kare_dir
 
 from pintu import geometry as geo
 from pintu.render import library_source
@@ -10,8 +9,6 @@ from pintu.render import library_source
 N = 36
 DIVISORS = [n for n in range(1, N + 1) if N % n == 0]
 LENGTHS = [183.0, 170.0, 136.0, 89.0]
-KARE = kare_dir()
-FIG_TYP = KARE / "formats/publication/fig.typ" if KARE else None
 
 
 def cases():
@@ -22,9 +19,9 @@ def cases():
 
 
 def typst_spans(prelude: str, fn: str, length: float, root=None) -> list:
-    """Evaluates fig-span (or grid-span) for every case in one Typst run."""
+    """Evaluates even-span (or grid-span) for every case in one Typst run."""
     calls = ", ".join(
-        f"{fn}({length}mm, {n}, {i}, k: {k}, gutter: 3mm)" if fn == "fig-span"
+        f"{fn}({length}mm, {n}, {i}, k: {k}, gutter: 3mm)" if fn == "even-span"
         else f"{fn}({length}mm, {N}, {i * N // n}, {(i + k) * N // n}, gutter: 3mm)"
         for n, i, k in cases())
     src = f"{prelude}\n#metadata(({calls},).map(s => (s.at / 1mm, s.len / 1mm))) <out>\n"
@@ -32,18 +29,18 @@ def typst_spans(prelude: str, fn: str, length: float, root=None) -> list:
     return json.loads(out)
 
 
-def test_grid_matches_fig_span_formula():
+def test_grid_matches_even_span_formula():
     for L in LENGTHS:
         for n, i, k in cases():
             a, b = i * N // n, (i + k) * N // n
-            assert geo.span(L, N, a, b) == pytest.approx(geo.fig_span(L, n, i, k), abs=0.01)
+            assert geo.span(L, N, a, b) == pytest.approx(geo.even_span(L, n, i, k), abs=0.01)
 
 
 @pytest.mark.parametrize("L", LENGTHS)
-def test_grid_matches_vendored_fig_span_in_typst(L, tmp_path):
+def test_grid_matches_even_span_in_typst(L, tmp_path):
     (tmp_path / "lib.typ").write_text(library_source())
     ours = typst_spans('#import "/lib.typ": *', "grid-span", L, root=str(tmp_path))
-    ref = typst_spans('#import "/lib.typ": *', "fig-span", L, root=str(tmp_path))
+    ref = typst_spans('#import "/lib.typ": *', "even-span", L, root=str(tmp_path))
     assert len(ours) == len(ref) == len(list(cases()))
     for (n, i, k), (at, ln), (rat, rln) in zip(cases(), ours, ref):
         pa, pl = geo.span(L, N, i * N // n, (i + k) * N // n)
@@ -51,21 +48,10 @@ def test_grid_matches_vendored_fig_span_in_typst(L, tmp_path):
         assert abs(pa - rat) < 0.01 and abs(pl - rln) < 0.01, (n, i, k)
 
 
-@pytest.mark.skipif(not (FIG_TYP and FIG_TYP.exists()), reason=KARE_SKIP)
-@pytest.mark.parametrize("L", LENGTHS)
-def test_grid_matches_kare_fig_span(L):
-    ref = typst_spans('#import "/formats/publication/fig.typ": fig-span', "fig-span", L,
-                      root=str(KARE))
-    assert len(ref) == len(list(cases()))
-    for (n, i, k), (rat, rln) in zip(cases(), ref):
-        pa, pl = geo.span(L, N, i * N // n, (i + k) * N // n)
-        assert abs(pa - rat) < 0.01 and abs(pl - rln) < 0.01, (n, i, k)
-
-
 def test_nested_thirds_land_on_grid():
-    # Thirds of the right half (fig-span of a span) are grid lines 18, 24, 30.
+    # Thirds of the right half (even-span of a span) are grid lines 18, 24, 30.
     L, g = 183.0, 3.0
-    half_at, half_len = geo.fig_span(L, 2, 1)
+    half_at, half_len = geo.even_span(L, 2, 1)
     u = (half_len - 2 * g) / 3
     for j, line in enumerate((18, 24, 30)):
         assert geo.span(L, N, line, line + 6)[0] == pytest.approx(half_at + j * (u + g), abs=1e-9)

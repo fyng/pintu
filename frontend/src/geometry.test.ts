@@ -13,7 +13,7 @@ describe("snap", () => {
     expect(snap(999, 183, 36, 3)).toBe(36);
   });
 
-  it("matches fig-span for halves", () => {
+  it("matches the even division for halves", () => {
     const [x, , w] = rect(page, [18, 0, 36, 6]);
     expect(x).toBeCloseTo((183 - 3) / 2 + 3, 9);
     expect(w).toBeCloseTo((183 - 3) / 2, 9);

@@ -1,10 +1,8 @@
 import asyncio
-import shutil
 import time
 from pathlib import Path
 
 import pytest
-from conftest import KARE_SKIP, kare_dir
 from fastapi.testclient import TestClient
 
 from pintu import agent as ag, lint, style
@@ -18,8 +16,7 @@ from pintu.server import create_app
 
 REPO = Path(__file__).resolve().parents[2]
 STRICT = REPO / "examples" / "stylepacks" / "strict"
-KARE = kare_dir()
-PLEX = KARE / "core" / "fonts" / "ibm-plex-sans" if KARE else None
+TEST_FONT = "Pintu Test Sans"
 
 RECIPES = '''from matplotlib.figure import Figure
 
@@ -85,10 +82,10 @@ def wrong_size(w, h):
     return fig
 
 
-def plex(w, h):
+def own_font(w, h):
     fig, ax = _fig(w, h)
     ax.tick_params(**RC)
-    ax.xaxis.label.set_family("IBM Plex Sans")
+    ax.xaxis.label.set_family("Pintu Test Sans")
     return fig
 '''
 
@@ -203,20 +200,34 @@ def test_missing_pack_font(tmp_path):
     assert any("not found by Typst" in w for w in warnings) and any("matplotlib" in w for w in warnings)
 
 
-@pytest.mark.skipif(not (PLEX and PLEX.is_dir()), reason=KARE_SKIP)
+def write_test_font(folder: Path) -> None:
+    """Writes matplotlib's DejaVu Sans renamed to ``TEST_FONT``, a family no system or tool has."""
+    import matplotlib
+    from fontTools.ttLib import TTFont
+
+    font = TTFont(Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans.ttf")
+    names = {1: TEST_FONT, 4: TEST_FONT, 6: TEST_FONT.replace(" ", ""), 16: TEST_FONT}
+    for rec in font["name"].names:
+        if rec.nameID in names:
+            rec.string = names[rec.nameID]
+    folder.mkdir(parents=True)
+    font.save(folder / "PintuTestSans.ttf")
+
+
 def test_pack_font_paths(tmp_path):
-    """A pack that ships a font: Typst and the recipe kernel both find it."""
+    """A pack that ships a font: Typst and the recipe kernel both find it, through the pack only."""
     d = tmp_path / "p"
-    shutil.copytree(PLEX, d / "fonts")
+    write_test_font(d / "fonts")
+    assert TEST_FONT.lower() not in style.typst_families()
     (d / "stylepack.toml").write_text('[pack]\nname = "x"\ndefault_preset = "a"\n'
-                                      '[fonts]\nfamily = ["IBM Plex Sans"]\npaths = ["fonts"]\n'
+                                      f'[fonts]\nfamily = ["{TEST_FONT}"]\npaths = ["fonts"]\n'
                                       "[presets.a]\nwidths = {full = 100}\nmax_height = 80\n")
     pack = style.load(d)
-    assert "ibm plex sans" in style.typst_families(pack.font_paths)
+    assert TEST_FONT.lower() in style.typst_families(pack.font_paths)
     (tmp_path / "proj").mkdir()
     project = make(tmp_path / "proj", d)
-    res, rs = render(project, "plex")
-    assert rs.fonts_found == ["IBM Plex Sans"] and "IBM Plex Sans" in res.summary["fonts"]
+    res, rs = render(project, "own_font")
+    assert rs.fonts_found == [TEST_FONT] and TEST_FONT in res.summary["fonts"]
     assert res.lint == [] and style.font_problems(pack, rs.fonts_found) == []
 
 

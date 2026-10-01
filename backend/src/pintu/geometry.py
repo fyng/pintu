@@ -43,8 +43,8 @@ def span(length: float, n: int, a: int, b: int, gutter: float = 3.0) -> tuple[fl
     return a * p, (b - a) * p - gutter
 
 
-def fig_span(length: float, n: int, i: int, k: int = 1, gutter: float = 3.0) -> tuple[float, float]:
-    """``fig-span`` of academic-design-system: k units from unit i of n."""
+def even_span(length: float, n: int, i: int, k: int = 1, gutter: float = 3.0) -> tuple[float, float]:
+    """Start and length in mm of k units from unit i, of n equal units with gutters between them."""
     u = (length - (n - 1) * gutter) / n
     return i * (u + gutter), k * u + (k - 1) * gutter
 
