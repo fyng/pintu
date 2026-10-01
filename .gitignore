@@ -21,3 +21,6 @@ pintu_out/
 # Local exit-test material (not part of the repo)
 local/
 *.tsbuildinfo
+
+# AI agents
+.claude/
